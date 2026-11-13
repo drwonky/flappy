@@ -1,0 +1,386 @@
+
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+							<style>
+								body {
+									background-color: white; /* Ensure the iframe has a white background */
+								}
+
+								
+							</style>
+                        </head>
+                        <body>
+                            <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flappy - autopilot, 8-bit</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0d10;display:grid;place-items:center;gap:12px;
+    font:600 12px/1.5 ui-monospace,monospace;color:#7d8a94;letter-spacing:.08em}
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;
+    box-shadow:0 14px 44px rgba(0,0,0,.6);border-radius:3px;touch-action:none}
+  #hud{text-align:center;text-transform:uppercase;max-width:62ch}
+  #hud b{color:#e6edf3}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">autopilot, no input. bird sprite now <b>2x</b> so its width is <b>0.65</b> of the pipe shaft, matching the original</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   GEOMETRY - 288x512 logical, base 288x112 -> sky 400. SKY is
+   nudged to 399 so the horizon lands on a scan row.
+   ============================================================ */
+const W = 288, H = 512, GROUND = 113;
+const SKY = H - GROUND;
+
+/* PHYSICS - per-frame values widely quoted for the original (gravity
+   0.5 px/frame^2, flap -9 px/frame) converted to px/s. Unchanged from
+   the previous build; NOT re-simulated in this edit (sandbox down). */
+const GRAVITY = 1800;
+const FLAP = 540;
+const MAXVY = 560;
+const FIXED = 1/120;
+const COOLD = 0.34;         // > FLAP/GRAVITY = 0.30s, so the bird cannot hover
+
+const BIRD_X = 80;
+const BW = 17, BH = 12;     // hand-authored sprite
+const BS = 2;               // sprite is drawn 2x: 34x24 on screen
+const SPR_W = BW * BS, SPR_H = BH * BS;
+const HW = 10, HH = 8;      // hitbox 20x16, forgiving inside the sprite as the original's is
+
+/* PIPE - shaft 52 (pipe.png is 52x320). Lip overhang and lip height are
+   now ratios of the shaft, measured off the reference: lip = 1.24x shaft,
+   lip height = 0.40x shaft. */
+const PIPE_W = 52;
+const CAP_X = 6;                    // lip overhang per side
+const CAP_W = PIPE_W + 2 * CAP_X;   // 64
+const CAP_H = 20;
+const GAP0 = 140, GAP1 = 104;       // floor raised from 96: the bird is 16 tall now
+
+const SPEED0 = 130, SPEED1 = 200;
+const SPACE0 = 1.30, SPACE1 = 0.95;
+const TAU = 85;
+
+const K = 0.30;
+const MARGIN_FRAC = 0.06;
+const WOBBLE_FRAC = 0.12;
+
+const C = {
+  skyA:"#6cc5de", skyB:"#9adcec", skyC:"#c6ecf2", skyD:"#e4f6f7",
+  cloud:"#eef7fa", hill:"#7fbf4d", hillDark:"#5f9a38",
+  grass:"#74bf2e", grassDark:"#4e8f21",
+  sand:"#ded895", sandDark:"#c3bb6d",
+  pipeO:"#14200f", pipeLt:"#8ed04a", pipeHi:"#74bf2e", pipeMid:"#5aa81f", pipeLo:"#3d7a12",
+  ink:"#1a2419",
+  birdY:"#f8e018", birdD:"#d9a90f", birdC:"#f5f2c0",
+  eye:"#ffffff", pupil:"#20242a", beak:"#e8483a", beakLo:"#b62f26"
+};
+
+/* ============================================================
+   PIPE BANDS - the structure that reads as a Mario warp pipe.
+   Both lists are x-offsets from the LEFT EDGE OF THE LIP, so the
+   highlight column lands at the same absolute x in lip and shaft.
+   The shaft's extra structure is absent: no dashes, no rivets.
+   ============================================================ */
+const SHAFT_BANDS = [   // drawn at x, width PIPE_W
+  [CAP_X,      1, C.pipeO],    // outline
+  [CAP_X + 1,  6, C.pipeLt],   // left catch-light
+  [CAP_X + 7, 11, C.pipeHi],   // highlight
+  [CAP_X + 18, 18, C.pipeMid], // body
+  [CAP_X + 36, 15, C.pipeLo],  // shadow
+  [CAP_X + 51,  1, C.pipeO]    // outline
+];
+const LIP_BANDS = [     // drawn at x - CAP_X, width CAP_W
+  [0,  1, C.pipeO],
+  [1,  12, C.pipeLt],   // left bands match the shaft exactly
+  [13, 11, C.pipeHi],
+  [24, 18, C.pipeMid],
+  [42, 20, C.pipeLo],   // the overhang lands in the shadow - that IS the turn
+  [62,  1, C.pipeO],
+  [63,  1, C.pipeO]
+];
+
+let bird, pipes, score = 0, best = 0, cooldown = 0, since = 1e9, aimOff = 0;
+let dead = false, deadT = 0, flash = 0, clock = 0;
+let frameIdx = 0, frameT = 0, wingHold = 0;
+let speed = SPEED0, gap = GAP0, spaceSec = SPACE0;
+
+function ramp(sc) {
+  const k = 1 - Math.exp(-sc / TAU);
+  speed = SPEED0 + (SPEED1 - SPEED0) * k;
+  gap = GAP0 + (GAP1 - GAP0) * k;
+  spaceSec = SPACE0 + (SPACE1 - SPACE0) * k;
+}
+const usable = () => gap - 2 * HH;
+
+function reset() {
+  bird = { y: H * 0.42, vy: 0 };
+  pipes = [];
+  score = 0; cooldown = 0; since = 1e9; aimOff = 0;
+  dead = false; deadT = 0; flash = 0;
+  frameIdx = 0; frameT = 0; wingHold = 0;
+  ramp(0);
+}
+
+function spawn() {
+  const top = 30 + Math.random() * (SKY - 60 - gap);
+  pipes.push({ x: W, top: top, bot: top + gap, passed: false });
+  aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
+}
+
+function wantFlap(n) {
+  const target = (n.top + n.bot) / 2 + aimOff;
+  if ((bird.y - target) + K * bird.vy <= 0) return false;
+  const apex = bird.y - (FLAP * FLAP) / (2 * GRAVITY);
+  return apex >= n.top + HH + usable() * MARGIN_FRAC;
+}
+
+function step(dt) {
+  clock += dt;
+  flash = Math.max(0, flash - dt * 3);
+  if (dead) { deadT += dt; if (deadT > 1.3) reset(); return; }
+  ramp(score);
+
+  since += speed * dt;
+  if (since >= speed * spaceSec) { since = 0; spawn(); }
+
+  cooldown -= dt;
+  let n = null;
+  for (const p of pipes) { if (p.x + PIPE_W > BIRD_X - HW) { n = p; break; } }
+  if (n && cooldown <= 0 && wantFlap(n)) {
+    bird.vy = -FLAP;
+    cooldown = COOLD;
+    wingHold = 0.16;
+    frameIdx = 0; frameT = 0;
+  }
+
+  frameT += dt;
+  const rate = cooldown > 0 ? 0.13 : 0.09;
+  if (frameT > rate) {
+    frameT = 0;
+    if (wingHold > 0) wingHold -= rate; else frameIdx = (frameIdx + 1) % 4;
+  }
+
+  bird.vy = Math.min(bird.vy + GRAVITY * dt, MAXVY);
+  bird.y += bird.vy * dt;
+
+  for (const p of pipes) {
+    p.x -= speed * dt;
+    if (!p.passed && p.x + PIPE_W < BIRD_X - HW) { p.passed = true; score++; if (score > best) best = score; }
+  }
+  pipes = pipes.filter(p => p.x + PIPE_W > -80);
+
+  if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(); return; }
+  for (const p of pipes) {
+    if (BIRD_X + HW > p.x && BIRD_X - HW < p.x + PIPE_W &&
+        (bird.y - HH < p.top || bird.y + HH > p.bot)) { die(); return; }
+  }
+}
+
+function die() { dead = true; deadT = 0; flash = 1; }
+
+/* ---------- bird sprite: 17x12 authored, 34x24 rendered ---------- */
+const FRAMES = [
+  "......................KKKKKKK........KKYYYYYWWK......KYYDYYYWWWK......KDDDDYYWWWKK....KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDCCCCCRRK....KYYYCCCCCCOOK....KKYYYCCCCKKK.......KKKKKKK.......................",
+  "......................KKKKKKK........KKYYYYYWWK......KYYYYYYYWWWK.....KYYYYYYYWWWKK...KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDDCCCCCRRK..KDDDDDCCCCCCOOK...KYYYCCCCCKKKK......KKKKKKK.......................",
+  "......................KKKKKKK........KKYYYYYWWWK.....KYYYYYYYWWWKK...KYYYYYYYCCWWRRK..KDDDDDDDCCCRRRK..KDDDDDDCCCCCCRK..KDDDDCCCCCCCOOK...KDDDCCCCCKKKK.....KKKKKKK.......................",
+  "......................KKKKKKK........KKYYYYYWWK......KYYYYYYYWWWK.....KYYYYYYYWWWKK...KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDDCCCCCRRK..KDDDDDCCCCCCOOK...KYYYCCCCCKKKK......KKKKKKK......................."
+];
+const SPR = { K: C.ink, Y: C.birdY, D: C.birdD, C: C.birdC, W: C.eye, R: C.beak, O: C.beakLo };
+
+/* ---------- paint ---------- */
+const cvs = document.getElementById("game");
+const ctx = cvs.getContext("2d", { alpha: false });
+let N = 2, DEV = 2;
+
+function fit() {
+  // N = CSS multiple of the logical grid, DEV = backing multiple. DEV must be
+  // an exact integer multiple of N, or the scanlines alias.
+  let n = Math.max(2, Math.min(3, Math.floor((innerHeight - 120) / H)));
+  let d = Math.max(1, Math.round(devicePixelRatio || 1));
+  N = n; DEV = n * d;
+  cvs.width = W * DEV; cvs.height = H * DEV;
+  cvs.style.width = (W * N) + "px";
+  cvs.style.height = (H * N) + "px";
+  ctx.setTransform(DEV, 0, 0, DEV, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
+fit();
+addEventListener("resize", fit);
+
+function px(x, y, w, h, col) {
+  ctx.fillStyle = col;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+
+function sky() {
+  const cols = [C.skyA, C.skyA, C.skyB, C.skyB, C.skyC, C.skyC, C.skyD];
+  const bh = Math.ceil(SKY / cols.length);
+  for (let i = 0; i < cols.length; i++) px(0, i * bh, W, bh, cols[i]);
+}
+
+function clouds() {
+  ctx.fillStyle = C.cloud;
+  for (let i = 0; i < 3; i++) {
+    const x = Math.round((((i * 118) - clock * 14) % (W + 120) + W + 120) % (W + 120) - 60);
+    const y = 46 + i * 58;
+    ctx.fillRect(x, y, 44, 10);
+    ctx.fillRect(x + 8, y - 6, 28, 6);
+    ctx.fillRect(x + 16, y - 11, 14, 5);
+    ctx.fillRect(x - 6, y + 10, 56, 6);
+  }
+}
+
+function skyline() {
+  ctx.fillStyle = C.hillDark;
+  for (let i = 0; i < 8; i++) {
+    const x = Math.round((((i * 46) - clock * speed * 0.06) % (W + 70) + W + 70) % (W + 70) - 35);
+    ctx.fillRect(x, SKY - 26, 34, 26);
+  }
+  ctx.fillStyle = C.hill;
+  for (let i = 0; i < 9; i++) {
+    const x = Math.round((((i * 40) - clock * speed * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
+    ctx.fillRect(x, SKY - 14, 30, 14);
+    ctx.fillRect(x + 4, SKY - 18, 22, 4);
+  }
+}
+
+/* isTop is passed in, never inferred: inferring it from position mis-caps
+   long lower pipes, which is the bug reported earlier in this build. */
+function pipePart(x, y0, y1, isTop) {
+  const lipY = isTop ? y1 - CAP_H : y0;
+  const shaftY0 = isTop ? y0 : y0 + CAP_H;
+  const shaftY1 = isTop ? y1 - CAP_H : y1;
+
+  for (const [ox, bw, col] of SHAFT_BANDS) px(x + ox - CAP_X, shaftY0, bw, shaftY1 - shaftY0, col);
+  for (const [ox, bw, col] of LIP_BANDS)   px(x + ox - CAP_X, lipY, bw, CAP_H, col);
+
+  // cap edges: dark rule top and bottom of the lip, and a rule at the join
+  px(x - CAP_X, lipY, CAP_W, 2, C.pipeO);
+  px(x - CAP_X, lipY + CAP_H - 2, CAP_W, 2, C.pipeO);
+}
+
+function ground() {
+  const off = Math.round((clock * speed) % 24);
+  px(0, SKY, W, GROUND, C.sand);
+  px(0, SKY, W, 12, C.grass);
+  px(0, SKY + 12, W, 3, C.grassDark);
+  for (let x = -24; x < W + 24; x += 24) {
+    px(x - off, SKY + 30, 12, GROUND - 30, C.sandDark);
+    px(x - off + 14, SKY + 15, 6, 8, C.grassDark);
+  }
+}
+
+function drawBird() {
+  const f = FRAMES[frameIdx] || FRAMES[0];
+  ctx.save();
+  ctx.translate(Math.round(BIRD_X), Math.round(bird.y));
+  ctx.rotate(bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620));
+  for (let y = 0; y < BH; y++) {
+    for (let x = 0; x < BW; x++) {
+      const col = SPR[f.charAt(y * BW + x)];
+      if (!col) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect((x * BS) - (SPR_W >> 1), (y * BS) - (SPR_H >> 1), BS, BS);
+    }
+  }
+  ctx.restore();
+}
+
+function outlineText(s, x, y, col, size) {
+  ctx.font = "700 " + size + "px ui-monospace, monospace";
+  ctx.textAlign = "center";
+  ctx.fillStyle = C.ink;
+  for (const d of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1]]) ctx.fillText(s, x + d[0], y + d[1]);
+  ctx.fillStyle = col;
+  ctx.fillText(s, x, y);
+  ctx.textAlign = "left";
+}
+
+function draw() {
+  sky();
+  clouds();
+  skyline();
+  for (const p of pipes) {
+    pipePart(p.x, 0, p.top, true);
+    pipePart(p.x, p.bot, SKY, false);
+  }
+  ground();
+  drawBird();
+
+  outlineText(String(score), W / 2, 72, "#ffffff", 32);
+  ctx.font = "700 9px ui-monospace, monospace";
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  ctx.fillText("BEST " + best, 8, 16);
+  ctx.textAlign = "right";
+  ctx.fillText("SPD " + Math.round(speed) + " GAP " + Math.round(gap), W - 8, 16);
+  ctx.textAlign = "left";
+
+  const k = 1 - Math.exp(-score / TAU);
+  ctx.fillStyle = "rgba(0,0,0,.35)";
+  ctx.fillRect(8, 22, 96, 5);
+  ctx.fillStyle = C.birdY;
+  ctx.fillRect(8, 22, 96 * k, 5);
+  if (cooldown > 0) {
+    ctx.fillStyle = "rgba(255,255,255,.55)";
+    ctx.fillRect(8, 30, 96 * (cooldown / COOLD), 2);
+    ctx.fillStyle = "rgba(255,255,255,.75)";
+    ctx.font = "700 8px ui-monospace, monospace";
+    ctx.fillText("WING COOLDOWN", 8, 46);
+  }
+
+  if (dead) {
+    ctx.fillStyle = "rgba(255,255,255," + (0.5 * flash) + ")";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(20,32,15,.92)";
+    ctx.fillRect(W / 2 - 66, H / 2 - 34, 132, 66);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 16px ui-monospace, monospace";
+    ctx.fillText("CRASHED", W / 2, H / 2 - 10);
+    ctx.fillStyle = "#9fb0bd";
+    ctx.font = "700 10px ui-monospace, monospace";
+    ctx.fillText("score " + score, W / 2, H / 2 + 8);
+    ctx.fillText("restarting...", W / 2, H / 2 + 22);
+    ctx.textAlign = "left";
+  }
+
+  /* scanlines drawn in DEVICE pixels at an integer period, so the spacing
+     is exact at any devicePixelRatio. This is what the irregular lines were:
+     a 3-logical-px overlay landing on fractional device rows. */
+  const O = Math.max(3, Math.round(3 * (DEV / N)));
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "rgba(0,0,0,.15)";
+  for (let y = 0; y < H * DEV; y += O) ctx.fillRect(0, y, W * DEV, 1);
+  ctx.setTransform(DEV, 0, 0, DEV, 0, 0);
+}
+
+reset();
+let acc = 0, last = performance.now();
+function loop(now) {
+  acc = Math.min(0.25, acc + (now - last) / 1000);
+  last = now;
+  while (acc >= FIXED) { step(FIXED); acc -= FIXED; }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
+
+							<script>
+                            	
+							</script>
+                        </body>
+                        </html>
+                    

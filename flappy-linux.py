@@ -7,16 +7,19 @@
   python3 flappy-linux.py --selftest  headless games -> crash statistics
   --seed N   --stats (bytes/frame, for 9600-baud curiosity)
 
-RENDERING: the scene is painted in RGB on a 160x48 SUB-PIXEL grid (2x2 per
-character cell). Each cell is then quantised to the best (glyph, fg, bg)
-the Linux console can actually show: 16 foregrounds (bold = bright), 8
-backgrounds, and only glyphs in its CP437 font -
+RENDERING: the scene is painted on a 160x48 SUB-PIXEL grid (2x2 per
+character cell). Every material is AUTHORED as a console tone - one
+(glyph, fg, bg) the Linux console can show: 16 foregrounds (bold = bright),
+8 backgrounds, and only glyphs in its CP437 font -
    ' ' / '█'          solid bg / solid fg
-   '░' '▒' '▓'        fg over bg at 1/4, 1/2, 3/4: ~300 blended colours
-   '▀' '▄' '▌' '▐'    two-colour split, vertical or horizontal (pipe edges
-                      land on half-columns)
-Shade pairs are restricted to related hues so blends read as tone, not
-noise. The bird is authored in exact VGA colours on cell-aligned square
+   '░' '▒' '▓'        fg over bg at 1/4, 1/2, 3/4, related hues only
+   '▀' '▄' '▌' '▐'    two solid tones split in one cell (pipe edges land on
+                      half-columns)
+A cell is resolved from the tones of its four sub-pixels, never from their
+averaged colour: one tone -> that tone, two solid tones split in halves ->
+a half block, otherwise the majority (ties to the darker). Scenery is placed
+on the cell grid and pipe gate edges on even sub-rows, so shapes are stable
+as they scroll. The bird is in exact VGA colours on cell-aligned square
 pixels, so every one of its cells is an exact '▀' pair.
 --vt100 has no colour and no blocks: sky is blank paper and everything else
 is inked by darkness using space, '·', the chequerboard and reverse video.
@@ -43,20 +46,29 @@ HOVER   = 2.0*FLAP/GRAV          # 0.60s
 COOLD   = 0.50                   # < HOVER: hover possible but costs 83% of flaps
 MAXVY   = 1.40*SKY
 BIRD_X  = 0.278*SW
-HW, HH  = 3.9, 3.0               # bird sprite is 8x6 sub-px; hitbox just inside
+# COLLISION IS PIXEL PERFECT: the bird dies exactly when a pixel it DRAWS
+# touches a pixel a pipe DRAWS (lips included) or the ground line. The old
+# 7.8x6 hitbox was sized for an 8x6 sprite; the sprite became 22x7 (square
+# pixels) and the hitbox never followed, so the beak and tail sailed through
+# pipe lips. Both sides now come from the same geometry as the renderer.
+BIRD_COL0 = 2*(int(BIRD_X/2)-4)  # sprite's left sub-column: cell aligned
+BT, BB  = 3, 3                   # sprite rows above / below round(y)
 PIPE_W  = 29                     # 29/160 = 0.181 = original 52/288 screens
+LIPL, LIPR, LIP_H = 3, 4, 4      # lip overhang left / right, lip height
 SPD0, SPD1 = 0.4167*SW, 0.5600*SW   # original 120px/s on 288 wide
 SPC0, SPC1 = 0.625*SW, 0.500*SW     # original 169px on 288 -> 1.7 pipes visible
-GAP0, GAP1 = 20.0, 16.0
+GAP0, GAP1 = 21.0, 17.0        # +1: the true (drawn) bird is 7 rows, not 6
 TAU     = 85.0
 APEX    = FLAP*FLAP/(2*GRAV)
-SAFE    = (GAP1-2*HH)-APEX       # width of the safe-flap band at the asymptote
+BH      = BT+BB+1                # drawn bird height
+SAFE    = (GAP1-BH)-APEX         # width of the safe-flap band at the asymptote
 
 assert SAFE > 0, "asymptote is geometrically impossible"
 assert COOLD < HOVER and COOLD > 0.30
 
 class Game:
-    def __init__(s, seed=None): s.rng = random.Random(seed); s.best = 0; s.reset()
+    def __init__(s, seed=None):
+        s.rng = random.Random(seed); s.best = 0; s.dist = 0.0; s.reset()
     def reset(s):
         s.y, s.vy, s.pipes = SKY*0.42, 0.0, []
         s.score, s.cool, s.since, s.aim = 0, 0.0, 1e9, 0.0
@@ -70,23 +82,29 @@ class Game:
     def spawn(s):
         top = 4 + s.rng.random()*(SKY-8-s.gap)
         s.pipes.append({"x": float(SW), "top": top, "bot": top+s.gap, "pass": False})
-        s.aim = (s.rng.random()*2-1)*(s.gap-2*HH)*0.12
+        s.aim = (s.rng.random()*2-1)*(s.gap-BH)*0.12
     # Thrust is one-sided: flapping at y puts your apex at y-APEX, so to cross
-    # a gate you must enter no higher than top+HH+APEX (else you clip the upper
-    # pipe) and no lower than bot-HH. Riding the TOP of that window is a limit
+    # a gate you must enter no higher than top+BT+APEX (else you clip the upper
+    # pipe) and no lower than bot-BB. Gates are judged as DRAWN (gate()). Riding the TOP of that window is a limit
     # cycle whose parabola spans exactly APEX. Aim blends to the next gate early
     # enough to sink/climb to it, since descending costs only an abstained flap.
-    def zlo(s, n): return n["top"]+HH+APEX
+    def zlo(s, n): return gate(n)[0]+BT+0.5+APEX
     def want(s, n):
-        z, hi = s.zlo(n), n["bot"]-HH
-        if z >= hi: return s.y < 0.5*(n["top"]+n["bot"])
+        t, b = gate(n)
+        z, hi = s.zlo(n), b-BB-1.0
+        if z >= hi: return s.y < 0.5*(t+b)
         m = next((p for p in s.pipes if p["x"] > n["x"]+PIPE_W), None)
         if m:
             T   = (m["x"]-n["x"])/s.speed
-            tT  = (n["x"]-(BIRD_X+HW))/s.speed
+            tT  = (pipe_x(n)-LIPL-(BIRD_COL0+BIRD_WS))/s.speed
             if tT > T*0.55: z = min(z, s.zlo(m))
             if tT > T*0.30: z = max(z, s.zlo(m))
-        if s.y+HH >= SKY-1.0: return True
+            # committed to this gate: if the next one is LOWER, ride as low as
+            # this gate allows. The real bird plus the lip span most of the
+            # pipe spacing, so waiting until this gate is cleared leaves too
+            # little room to sink to the next one.
+            elif s.zlo(m) > z: z = min(s.zlo(m), hi-1.5)
+        if s.y+BB+1 >= SKY-1.0: return True
         return s.y >= z
     def step(s, dt):
         s.clock += dt; s.wing = max(0.0, s.wing-dt*4)
@@ -96,47 +114,136 @@ class Game:
             return
         s.ramp()
         s.since += s.speed*dt
+        s.dist  += s.speed*dt        # scroll distance: drawing only, never reset
         if s.since >= s.space: s.since = 0.0; s.spawn()
         s.cool -= dt
-        n = next((p for p in s.pipes if p["x"]+PIPE_W > BIRD_X-HW), None)
+        n = next((p for p in s.pipes if pipe_x(p)+PIPE_W+LIPR > BIRD_COL0), None)
         if n and s.cool <= 0 and s.want(n):
             s.vy, s.cool, s.wing = -FLAP, COOLD, 1.0; s.flaps += 1
         s.vy = min(s.vy+GRAV*dt, MAXVY); s.y += s.vy*dt
-        if s.y < HH: s.y, s.vy = HH, max(s.vy, 0.0)   # ceiling clamps: original
+        if s.y < BT: s.y, s.vy = BT, max(s.vy, 0.0)   # ceiling clamps: original
         for p in s.pipes:
             p["x"] -= s.speed*dt
-            if not p["pass"] and p["x"]+PIPE_W < BIRD_X-HW:
+            if not p["pass"] and pipe_x(p)+PIPE_W+LIPR <= BIRD_COL0:
                 p["pass"] = True; s.score += 1
                 if s.score > s.best: s.best = s.score
         s.pipes = [p for p in s.pipes if p["x"]+PIPE_W > -PIPE_W]
-        if s.y+HH >= SKY: s.die(); return             # only the ground kills
+        if s.hits(): s.die(); return
+    def hits(s):
+        """True iff a drawn bird pixel touches a drawn pipe pixel or the ground."""
+        r0 = int(round(s.y))-BT                    # exactly as draw_bird places it
+        if r0+BH > SKY: return True                # bottom row on the ground line
         for p in s.pipes:
-            if (BIRD_X+HW > p["x"] and BIRD_X-HW < p["x"]+PIPE_W and
-                (s.y-HH < p["top"] or s.y+HH > p["bot"])): s.die(); return
+            x = pipe_x(p)
+            if x-LIPL >= BIRD_COL0+BIRD_WS or x+PIPE_W+LIPR <= BIRD_COL0: continue
+            for x0,x1,y0,y1 in pipe_rects(p):
+                for dy,(a,b) in enumerate(BIRD_SPANS):
+                    if y0 <= r0+dy < y1 and BIRD_COL0+a < x1 and BIRD_COL0+b > x0:
+                        return True
+        return False
     def die(s): s.dead, s.deadT = True, 0.0
+
+# ---------- pipe geometry: ONE definition, used by the painter and collision ----------
+# x snaps to an even sub-column and the gate's top edge to an even sub-row; the
+# bottom edge is top + the gap rounded to even, so snapping can never narrow a
+# gate below its design width.
+def pipe_x(p): return 2*int(round(p["x"]/2))
+def gate(p):
+    t = 2*int(round(p["top"]/2))
+    return t, t+2*int(math.floor((p["bot"]-p["top"])/2+0.5))
+def pipe_rects(p):
+    """(x0, x1, y0, y1), half-open, of everything a pipe paints."""
+    x=pipe_x(p); t,b=gate(p)
+    return ((x,x+PIPE_W,0,t), (x-LIPL,x+PIPE_W+LIPR,t-LIP_H,t),
+            (x,x+PIPE_W,b,SKY), (x-LIPL,x+PIPE_W+LIPR,b,b+LIP_H))
+
+# ---------- console palette: what the Linux console can actually show ----------
+# 16 foreground colours (8 + bold) and 8 backgrounds. Only glyphs present in the
+# console's CP437 font are used: blank, full/half blocks and the three shade
+# characters, which blend fg over bg at 1/4, 1/2, 3/4.
+VGA=[(0,0,0),(170,0,0),(0,170,0),(170,85,0),(0,0,170),(170,0,170),(0,170,170),(170,170,170),
+     (85,85,85),(255,85,85),(85,255,85),(255,255,85),(85,85,255),(255,85,255),(85,255,255),(255,255,255)]
+def _lin(c): return tuple((v/255.0)**2.2 for v in c)
+def _srgb(l): return tuple(255.0*(v**(1/2.2)) for v in l)
+VLIN=[_lin(c) for c in VGA]
+def mix(a, b, t):
+    return (a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t)
+def err(a,b):
+    dr,dg,db=a[0]-b[0],a[1]-b[1],a[2]-b[2]
+    rm=(a[0]+b[0])*0.5                            # "redmean" perceptual distance
+    return (2+rm/256)*dr*dr+4*dg*dg+(2+(255-rm)/256)*db*db
+SHADES={"░":0.25,"▒":0.5,"▓":0.75}
+
+# A TONE is one (glyph, fg, bg) cell appearance. Every material in the scene is
+# AUTHORED as a tone and painted with that tone's displayed RGB, so each
+# sub-pixel maps back to its tone exactly. Cells are never averaged: averaging
+# is what turned boundaries and gradients into arbitrary fg/bg combinations
+# (grey over green, cyan over black) that changed from cell to cell - speckle.
+TONE={}
+def T(gl, f=None, b=None):
+    """displayed rgb of a tone, registered so the quantiser can recover it."""
+    if gl=="█" and f<8: gl,f,b=" ",None,f      # dark solids are a plain bg
+    if gl==" ":   rgb=VGA[b]
+    elif gl=="█": rgb=VGA[f]
+    else:
+        t=SHADES[gl]
+        rgb=_srgb(tuple(VLIN[f][k]*t+VLIN[b][k]*(1-t) for k in range(3)))
+    TONE.setdefault(rgb,(gl,f,b))
+    return tuple(rgb)              # a fresh object: --vt100 tells scenery by identity
+
+# Fallback for colours that are not authored tones (the death flash): the best
+# single tone, with shade pairs limited to fg/bg that belong together.
+FLAT=[]                                           # (rgb, glyph, fg, bg, texture penalty)
+for b in range(8): FLAT.append((VGA[b]," ",None,b,0))
+for f in range(8,16): FLAT.append((VGA[f],"█",f,None,0))
+NEIGH={(2,6),(6,2),(4,6),(6,4),(2,3),(3,2),(1,3),(3,1),(1,5),(5,1),(4,5),(5,4)}
+def harmonious(f,b):
+    h=f&7
+    return b==0 or b==7 or h==b or f in (7,8,15) or (h,b) in NEIGH
+for f in range(16):
+    for b in range(8):
+        if f==b or (f==8 and b==0) or not harmonious(f,b): continue
+        for gch,t,pen in (("░",0.25,1.0),("▒",0.5,1.6),("▓",0.75,1.0)):
+            l=tuple(VLIN[f][k]*t+VLIN[b][k]*(1-t) for k in range(3))
+            FLAT.append((_srgb(l),gch,f,b,pen*err(VGA[f],VGA[b])*0.002))
+_flat={}
+def best_flat(c):
+    c=(int(c[0])&~3,int(c[1])&~3,int(c[2])&~3)
+    r=_flat.get(c)
+    if r is None:
+        r=min(FLAT,key=lambda e: err(e[0],c)+e[4]); _flat[c]=r
+    return r
+def tone(c):
+    t=TONE.get(c)
+    if t is None: t=TONE[c]=best_flat(c)[1:4]
+    return t
+
+# ---------- materials, authored as console tones ----------
+# Shade pairs are same-hue or neighbouring-hue so blends read as tone, not noise.
+SKY_TOP  = T("░",14,6)                           # sky gradient, top to horizon:
+SKY_HI   = T("▒",14,6)                           # lightening toward the ground
+SKY_MID  = T("█",14)                             # bright cyan, SOLID: the bird is
+SKY_LO   = T("▓",14,7)                           # black-outlined, so it splits
+                                                 # cleanly against it
+CLOUD, CLOUD_SH = T("█",15), T("▓",15,7)
+FAR, FAR_HI     = T("▒",10,6), T("▓",10,6)       # far ridge: hazy blue-green
+BUSH, BUSH_HI, BUSH_LO = T("░",10,2), T("▒",10,2), T(" ",None,2)
+P_OUT, P_LT, P_HI = T(" ",None,0), T("▓",10,7), T("█",10)
+P_MID, P_LO, P_DK = T("▓",10,2), T(" ",None,2), T("▓",2,0)
+G_LINE, GRASS1, GRASS2, GRASS_LO = T(" ",None,0), T("█",10), T("▓",10,2), T("▓",2,0)
+DIRT, DIRT_LO  = T("▒",11,7), T("▒",11,3)
+
+def skyrow(y):
+    f=y/float(SKY)
+    if f<0.10: return SKY_TOP
+    if f<0.22: return SKY_HI
+    if f<0.84: return SKY_MID
+    return SKY_LO
+SKYROW = [skyrow(y) for y in range(SH)]
 
 # ---------- framebuffer + painter (sub-pixel RGB) ----------
 # A sub-pixel is half a column by half a row. Character cells are 1:2, so a
 # sub-pixel is itself 1:2 (tall): two sub-columns side by side make a square.
-def mix(a, b, t):
-    return (a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t)
-
-SKY_HI, SKY_LO = (40,110,200), (110,195,195)
-CLOUD, CLOUD_SH = (252,252,252), (206,228,238)
-FAR, FAR_HI     = (70,185,150), (100,200,170)
-BUSH, BUSH_HI, BUSH_LO = (58,170,62), (96,214,80), (30,112,40)
-P_OUT, P_HI, P_MID, P_LO = (26,40,18), (120,236,92), (96,192,48), (40,116,26)
-G_LINE, GRASS1, GRASS2, GRASS_LO = (40,36,30), (130,220,70), (88,176,44), (52,120,34)
-DIRT, DIRT_LO  = (222,212,150), (196,170,104)
-
-SKY_MID = (0,170,170)                            # VGA cyan: solid, so sprites
-def skyrow(y):                                   # split cleanly against it
-    f=y/float(SKY)
-    if f<0.22: return mix(SKY_HI,SKY_MID,f/0.22)
-    if f<0.70: return SKY_MID
-    return mix(SKY_MID,SKY_LO,min(1.0,(f-0.70)/0.30))
-SKYROW = [skyrow(y) for y in range(SH)]
-
 class Scene:
     def __init__(s): s.L=[[SKY_HI]*SW for _ in range(SH)]
     def put(s,y,x,c):
@@ -161,64 +268,86 @@ class Scene:
     def clear(s):
         for y in range(SH): s.L[y]=[SKYROW[y]]*SW
 
+def layer(dist, k, n, gap):
+    """Positions of n repeating scenery items. The wrap period is exactly n*gap,
+    so spacing stays even across the wrap, and every x is snapped to an EVEN
+    sub-column: each item then lands on the cell grid identically every frame
+    and only moves in whole cells. Fractional placement re-sampled each shape
+    every frame, so one-sub-pixel details blinked in and out as it scrolled."""
+    per=n*gap; off=dist*k
+    return [2*int(math.floor((((i*gap-off)%per)-gap)/2.0)) for i in range(n)]
+
 def paint(sc, g, flash):
     sc.clear()
-    off=g.clock*g.speed*0.07                     # clouds: furthest, slowest
-    for i in range(5):
-        x=((i*44-off)%(SW+60))-30; y=6+(i*5)%13
+    for i,x in enumerate(layer(g.dist,0.07,5,44)):         # clouds: furthest, slowest
+        y=6+(i*5)%13
         for (dx,dy,rx,ry) in ((0,1,9,3),(8,-1,9,4),(17,1,8,3),(5,2,14,2.5)):
-            sc.blob(x+dx,y+dy,rx,ry,CLOUD,shade=CLOUD_SH)
-    off=g.clock*g.speed*0.16                     # far ridge: hazy blue-green
-    for i in range(8):
-        x=((i*26-off)%(SW+52))-26; h=7+(i*5)%6
-        sc.blob(x,SKY,16,h,FAR,hi=FAR_HI)
-    off=g.clock*g.speed*0.34                     # near bushes: saturated
-    for i in range(10):
-        x=((i*19-off)%(SW+38))-19; h=4+(i*3)%3
-        sc.blob(x,SKY+1,12,h,BUSH,shade=BUSH_LO,hi=BUSH_HI)
+            sc.blob(x+12+dx,y+dy,rx,ry,CLOUD,shade=CLOUD_SH)
+    for i,x in enumerate(layer(g.dist,0.16,8,26)):         # far ridge: hazy
+        sc.blob(x+12,SKY,16,7+(i*5)%6,FAR,hi=FAR_HI)
+    for i,x in enumerate(layer(g.dist,0.34,10,19)):        # near bushes: saturated
+        sc.blob(x+10,SKY+1,12,4+(i*3)%3,BUSH,shade=BUSH_LO,hi=BUSH_HI)
     for p in g.pipes:                            # pipes: lit cylinder, dark outline
-        x=int(round(p["x"]))
+        # ONE integer edge per gate, used by shaft and lip alike (the shaft used
+        # to stop at int(top) while the lip sat at round(top-5), leaving a stub
+        # of shaft past the lip). Edges snap to EVEN sub-rows, so the lip is
+        # exactly two cell rows and each thin rule shares its cell with lip body
+        # only. The lip body is SOLID colours, so rule + body is an exact half
+        # block; a shaded body cannot split and would swallow the rule's cell.
+        # x snaps to an EVEN sub-column too. Wherever a lip's side edge meets
+        # its rule, one cell holds 3 rule + 1 body sub-pixels, which no glyph
+        # can show; at half-column positions that corner flipped between a
+        # black cell and a half bar every step. Cell-aligned, with the lip
+        # spanning odd..even sub-columns (overhang 3 left, 4 right), every
+        # pipe cell is an exact split at every position.
+        x=pipe_x(p); t,b=gate(p)
         shaft=[P_OUT]+[pipe_shade(c,PIPE_W-2) for c in range(PIPE_W-2)]+[P_OUT]
-        lip=[P_OUT]+[pipe_shade(c,PIPE_W+4) for c in range(PIPE_W+4)]+[P_OUT]
-        for y0,y1,top in ((0,p["top"],True),(p["bot"],SKY,False)):
-            for y in range(max(0,int(y0)),min(SH,int(y1))):
+        lip=[P_OUT]+[lip_shade(c,PIPE_W+LIPL+LIPR-2) for c in range(PIPE_W+LIPL+LIPR-2)]+[P_OUT]
+        for y0,y1,cap in ((0,t,t-LIP_H),(b,SKY,b)):
+            for y in range(max(0,y0),min(SH,y1)):
                 r=sc.L[y]
                 for c,col in enumerate(shaft):
                     if 0<=x+c<SW: r[x+c]=col
-            cap=int(round((y1-5) if top else y0))
-            for y in range(cap,cap+5):
-                if not 0<=y<SH: continue
+            for y in range(cap,cap+LIP_H):
+                if not 0<=y<SKY: continue
                 r=sc.L[y]
+                rule=y==cap or y==cap+LIP_H-1
                 for c,col in enumerate(lip):
-                    xx=x-3+c
-                    if 0<=xx<SW: r[xx]=P_OUT if y in (cap,cap+4) else col
+                    xx=x-LIPL+c
+                    if 0<=xx<SW: r[xx]=P_OUT if rule else col
     sc.rect(0,SKY,SW,1,G_LINE)                   # ground: grass band + dirt
-    off=int(g.clock*g.speed)
-    for y in range(SKY+1,SKY+4):
+    off=int(g.dist)
+    sc.rect(0,SKY+1,SW,1,GRASS1)                 # solid, so the dark line above
+    for y in range(SKY+2,SKY+4):                 # always splits cleanly off it
         r=sc.L[y]
         for x in range(SW):
-            r[x]=GRASS1 if ((x+off+2*(y-SKY))%12)<6 else GRASS2
+            r[x]=GRASS1 if ((x+off)%12)<6 else GRASS2
     sc.rect(0,SKY+4,SW,1,GRASS_LO)
     sc.rect(0,SKY+5,SW,SH-SKY-5,DIRT)
-    for y in range(SKY+6,SH,2):
-        r=sc.L[y]
-        for x in range(SW):
-            if ((x+off)*7+y*13)%23==0: r[x]=DIRT_LO
+    offc=off//2                                  # dirt specks: whole cells, so
+    for cy in range((SKY+6)//2,FH):              # none can fall between them
+        for cx in range(-1,COLS+1):
+            if ((cx+offc)*7+cy*13)%23==0:
+                sc.rect(2*cx-(off&1),2*cy,2,2,DIRT_LO)
     draw_bird(sc,g)
     if flash>0:
         f=min(1.0,flash)
         for y in range(SH):
             sc.L[y]=[mix(c,(255,255,255),f) for c in sc.L[y]]
 
+def lip_shade(c,w):
+    return P_HI if c/float(w-1)<0.66 else P_LO     # solid only: see paint()
 def pipe_shade(c,w):
     t=c/float(w-1)
-    if t<0.10: return P_MID
-    if t<0.32: return P_HI
+    if t<0.08: return P_MID
+    if t<0.16: return P_LT
+    if t<0.36: return P_HI
     if t<0.62: return P_MID
-    return mix(P_MID,P_LO,min(1.0,(t-0.62)/0.25))
+    if t<0.84: return P_LO
+    return P_DK
 
 # Bird sprite in SQUARE pixels: one column wide, half a row tall, so each
-# character cell holds exactly two of them stacked -> one "\u2580" with fg/bg.
+# character cell holds exactly two of them stacked -> one "▀" with fg/bg.
 # Colours are VGA indices, so the quantiser reproduces them exactly. Only the
 # dark ones (<8) can sit in the background half of a cell, which is why the
 # outline, pupil and belly are 0/3/1 and the bright yellow/white are fg-only.
@@ -232,10 +361,18 @@ BIRD = ("..KKKKK...",
 WING = {0: ((1,2),(1,3),(2,1),(2,2),(2,3)),          # raised: the downstroke
         1: ((3,1),(3,2),(3,3),(4,1),(4,2)),          # level
         2: ((4,1),(4,2),(4,3),(5,2),(5,3))}          # lowered: gliding
+# per sprite row: the [first, last+1) SUB-columns it inks. Wing poses only
+# recolour pixels inside the outline, so this is the same for every frame.
+BIRD_SPANS = [(2*min(i for i,c in enumerate(r) if c!="."),
+               2*(max(i for i,c in enumerate(r) if c!=".")+1)) for r in BIRD]
+BIRD_WS = max(b for a,b in BIRD_SPANS)
+assert len(BIRD)==BH and all(c!="." for r in BIRD for c in r[r.index(r.strip(".")[0]):len(r.rstrip("."))]), \
+       "sprite rows must be solid between their ends, or BIRD_SPANS over-claims"
+assert all(BIRD[y][x]!="." for w in WING.values() for y,x in w), "wing outside the body"
 BCOL = {"K":0, "Y":11, "O":3, "W":15, "B":0, "R":9, "w":7}
 def draw_bird(sc,g):
-    col0 = 2*(int(BIRD_X/2)-4)                    # even sub-col: cell aligned
-    row0 = int(round(g.y))-3
+    col0 = BIRD_COL0
+    row0 = int(round(g.y))-BT
     ph = g.wing
     wf = 0 if ph>0.55 else 1 if ph>0.15 else 2
     if g.vy < -0.2*FLAP: wf = 0 if ph>0.55 else 1
@@ -249,69 +386,68 @@ def draw_bird(sc,g):
             sc.put(row0+y,col0+2*x,c); sc.put(row0+y,col0+2*x+1,c)
 
 # ---------- cell quantiser: 2x2 sub-pixels -> (glyph, fg, bg) ----------
-# Linux console / VGA: 16 foreground colours (8 + bold) and 8 backgrounds.
-# Only glyphs present in the console's CP437 font are used: full/half blocks
-# and the three shade characters, which blend fg over bg at 1/4, 1/2, 3/4.
-VGA=[(0,0,0),(170,0,0),(0,170,0),(170,85,0),(0,0,170),(170,0,170),(0,170,170),(170,170,170),
-     (85,85,85),(255,85,85),(85,255,85),(255,255,85),(85,85,255),(255,85,255),(85,255,255),(255,255,255)]
-def _lin(c): return tuple((v/255.0)**2.2 for v in c)
-def _srgb(l): return tuple(255.0*(v**(1/2.2)) for v in l)
-VLIN=[_lin(c) for c in VGA]
-def err(a,b):
-    dr,dg,db=a[0]-b[0],a[1]-b[1],a[2]-b[2]
-    rm=(a[0]+b[0])*0.5                            # "redmean" perceptual distance
-    return (2+rm/256)*dr*dr+4*dg*dg+(2+(255-rm)/256)*db*db
-
-FLAT=[]                                           # (rgb, glyph, fg, bg, texture penalty)
-for b in range(8): FLAT.append((VGA[b]," ",None,b,0))
-for f in range(16): FLAT.append((VGA[f],"█",f,None,0))
-# Shade pairs are limited to fg/bg that belong together (same hue, a grey,
-# or neighbouring hues): green-over-red may average right but reads as noise.
-NEIGH={(2,6),(6,2),(4,6),(6,4),(2,3),(3,2),(1,3),(3,1),(1,5),(5,1),(4,5),(5,4)}
-def harmonious(f,b):
-    h=f&7
-    return b==0 or b==7 or h==b or f in (7,8,15) or (h,b) in NEIGH
-for f in range(16):
-    for b in range(8):
-        if f==b or (f==8 and b==0) or not harmonious(f,b): continue
-        for gch,t,pen in (("░",0.25,1.0),("▒",0.5,1.6),("▓",0.75,1.0)):
-            l=tuple(VLIN[f][k]*t+VLIN[b][k]*(1-t) for k in range(3))
-            FLAT.append((_srgb(l),gch,f,b,pen*err(VGA[f],VGA[b])*0.002))
-_flat,_near16,_near8,_cell={}, {}, {}, {}
-def best_flat(c):
-    c=(int(c[0])&~3,int(c[1])&~3,int(c[2])&~3)
-    r=_flat.get(c)
-    if r is None:
-        r=min(FLAT,key=lambda e: err(e[0],c)+e[4]); _flat[c]=r
-    return r
-def near(c,n,cache):
-    c=(int(c[0])&~3,int(c[1])&~3,int(c[2])&~3)
-    r=cache.get(c)
-    if r is None: r=min(range(n),key=lambda i: err(VGA[i],c)); cache[c]=r
-    return r
-def avg(*cs):
-    l=[_lin(c) for c in cs]
-    return _srgb(tuple(sum(v[k] for v in l)/len(l) for k in range(3)))
-
+# Each sub-pixel is first mapped to its tone; the cell is then resolved WITHOUT
+# inventing colours that are in neither of them:
+#   one tone            -> that tone
+#   two SOLID tones split top/bottom or left/right -> exact half block
+#   a solid half over two solid bands -> half block over the darker band
+#   anything else       -> the majority tone, ties to the darker one (so
+#                          outlines win over what they outline)
+# Deterministic per tone pattern, so the same picture always gives the same
+# cells, and a shaded region can never break up into speckle.
 UP,DN,LF,RT="▀","▄","▌","▐"
+def solid(t):
+    return t[1] if t[0]=="█" else t[2] if t[0]==" " else None
+def _lum(t):
+    c=next(k for k,v in TONE.items() if v==t)
+    return 0.299*c[0]+0.587*c[1]+0.114*c[2]
+_tlum={}
+def tlum(t):
+    v=_tlum.get(t)
+    if v is None: v=_tlum[t]=_lum(t)
+    return v
+def shade_main(t):
+    return t[2] if t[0]=="░" else t[1]           # the colour the shade mostly shows
+def split(g1,g2,t1,t2):
+    """t1 fills the g1 half, t2 the other. Both solid, or one a DARK solid
+    (an outline) beside a shade: the shade then stands in for its main colour.
+    Without that, an outline over shaded scenery could not split and showed as
+    a whole black cell or nothing, depending on what scrolled past behind it."""
+    s1,s2=solid(t1),solid(t2)
+    if s1 is None and s2 is not None and s2<8: s1=shade_main(t1)
+    if s2 is None and s1 is not None and s1<8: s2=shade_main(t2)
+    if s1 is None or s2 is None: return None
+    if s2<8: return (g1,s1,s2)
+    if s1<8: return (g2,s2,s1)
+    return None        # both bright: dimming one drew a dark rim round clouds
+def rule_split(ta,tb,tc,td):
+    """One half is a single solid tone (a pipe rule or edge) and the other half
+    holds two tones (lip bands meeting, or scenery boundaries passing behind).
+    Keep the solid half exact and fill the other with the darker of its tones
+    that can split against it; otherwise the majority would turn the whole
+    cell into rule, and the edge would flick between half and whole cells."""
+    for u1,u2,m1,m2,g1,g2 in ((ta,tb,tc,td,UP,DN),(tc,td,ta,tb,DN,UP),
+                              (ta,tc,tb,td,LF,RT),(tb,td,ta,tc,RT,LF)):
+        if u1!=u2 or solid(u1) is None or m1==m2: continue
+        for t in sorted({m1,m2}-{u1},key=tlum):
+            r=split(g1,g2,u1,t)
+            if r is not None: return r
+    return None
+_cell={}
 def quantise(a,b,c,d):
-    """a b / c d sub-pixels -> (glyph, fg, bg) minimising summed error.
-    Root error (not squared) per sub-pixel: one wrong sub-pixel on a crisp
-    edge beats four muddy ones, so corners stay sharp instead of going grey."""
-    key=(a,b,c,d); r=_cell.get(key)
+    ta,tb,tc,td=tone(a),tone(b),tone(c),tone(d)
+    key=(ta,tb,tc,td); r=_cell.get(key)
     if r is not None: return r
-    px=(a,b,c,d)
-    fl=best_flat(avg(*px)); best=(sum(math.sqrt(err(fl[0],p)+fl[4]) for p in px),fl[1],fl[2],fl[3])
-    if not (a==b==c==d):
-        for g1,g2,m1,m2 in ((UP,DN,(a,b),(c,d)),(LF,RT,(a,c),(b,d))):
-            p1,p2=avg(*m1),avg(*m2)
-            for gl,fgc,bgc,fp,bp in ((g1,p1,p2,m1,m2),(g2,p2,p1,m2,m1)):
-                f=near(fgc,16,_near16); bk=near(bgc,8,_near8)
-                e=(sum(math.sqrt(err(VGA[f],p)) for p in fp)+
-                   sum(math.sqrt(err(VGA[bk],p)) for p in bp))
-                if e<best[0]: best=(e,gl,f,bk)
-    r=best[1:]
-    if len(_cell)>300000: _cell.clear()
+    if ta==tb==tc==td: r=ta
+    else:
+        r=None
+        if ta==tb and tc==td: r=split(UP,DN,ta,tc)
+        elif ta==tc and tb==td: r=split(LF,RT,ta,tb)
+        if r is None: r=rule_split(ta,tb,tc,td)
+        if r is None:
+            n={}
+            for t in key: n[t]=n.get(t,0)+1
+            r=max(n,key=lambda t:(n[t],-tlum(t)))
     _cell[key]=r
     return r
 
@@ -334,8 +470,9 @@ def ink(c,y):
     # paper (blank) and everything in front of it is inked by its darkness.
     if c is SKYROW[y]: return 0.0
     k=0.12+0.88*(1.0-lum(c))
-    return k*0.45 if c in SCENERY else k
-SCENERY={CLOUD,CLOUD_SH,FAR,FAR_HI,BUSH,BUSH_HI,BUSH_LO}
+    return k*0.45 if id(c) in SCENERY else k
+# by identity, not value: pipe and ground tones may share a colour with bushes
+SCENERY={id(c) for c in (CLOUD,CLOUD_SH,FAR,FAR_HI,BUSH,BUSH_HI,BUSH_LO)}
 def vt_rows(sc):
     L=sc.L; out=[]
     for r in range(FH):
@@ -409,7 +546,7 @@ class TTY:
 def hud(g):
     k=1.0-math.exp(-g.score/TAU)
     return (" FLAPPY-LINUX %3d BEST %3d  GAP %4.1f ZONE %3.1f  %s%s "
-            % (g.score,g.best,g.gap,(g.gap-2*HH)-APEX,"#"*int(18*k),"."*(18-int(18*k))))
+            % (g.score,g.best,g.gap,(g.gap-BH)-APEX,"#"*int(18*k),"."*(18-int(18*k))))
 
 def selftest(n, seed):
     print("selftest %d games, step %.4fs" % (n,FIXED))

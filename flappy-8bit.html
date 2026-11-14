@@ -1,36 +1,27 @@
-
-                        <!DOCTYPE html>
-                        <html lang="en">
-                        <head>
-                            <meta charset="UTF-8">
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-							<style>
-								body {
-									background-color: white; /* Ensure the iframe has a white background */
-								}
-
-								
-							</style>
-                        </head>
-                        <body>
-                            <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Flappy - autopilot, 8-bit</title>
 <style>
-  html,body{margin:0;height:100%;background:#0b0d10;display:grid;place-items:center;gap:12px;
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b0d10}
+  /* the page is exactly the viewport: canvas + caption are sized in fit() to fit inside it */
+  /* position:fixed + inset:0 tracks the VISIBLE viewport on mobile (address bar
+     shown or hidden) without relying on vh/dvh support */
+  body{position:fixed;inset:0;box-sizing:border-box;padding:16px;
+    display:flex;flex-direction:column;align-items:center;gap:12px;
     font:600 12px/1.5 ui-monospace,monospace;color:#7d8a94;letter-spacing:.08em}
-  canvas{image-rendering:pixelated;image-rendering:crisp-edges;
+  #stage{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center}
+  canvas{flex:none;display:block;image-rendering:pixelated;image-rendering:crisp-edges;
     box-shadow:0 14px 44px rgba(0,0,0,.6);border-radius:3px;touch-action:none}
-  #hud{text-align:center;text-transform:uppercase;max-width:62ch}
+  #hud{flex:none;text-align:center;text-transform:uppercase;max-width:min(62ch,100%)}
   #hud b{color:#e6edf3}
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<div id="hud">autopilot, no input. bird sprite now <b>2x</b> so its width is <b>0.65</b> of the pipe shaft, matching the original</div>
+<div id="stage"><canvas id="game"></canvas></div>
+<div id="hud">autopilot, no input. on a crash the bird <b>freezes</b>, sheds <b>feathers</b>, gets <b>zapped</b>, then flips and <b>falls</b></div>
 
 <script>
 "use strict";
@@ -114,6 +105,14 @@ let dead = false, deadT = 0, flash = 0, clock = 0;
 let frameIdx = 0, frameT = 0, wingHold = 0;
 let speed = SPEED0, gap = GAP0, spaceSec = SPACE0;
 
+/* ---------- death sequence ----------
+   0 .. D_FREEZE        : world and bird frozen, feathers burst out
+   D_FREEZE .. D_ZAP    : electrocution - palette flicker, jitter, bolts, flashes
+   D_ZAP ..             : bird flips upside down, small hop, falls off screen */
+const D_FREEZE = 0.22, D_ZAP = 1.15, D_HOP = 240, D_REST = 0.8;
+let feathers = [], bolts = [], zapT = 0, zapOn = false, jit = [0, 0];
+let falling = false, offT = 0, deathRot = 0;
+
 function ramp(sc) {
   const k = 1 - Math.exp(-sc / TAU);
   speed = SPEED0 + (SPEED1 - SPEED0) * k;
@@ -128,6 +127,8 @@ function reset() {
   score = 0; cooldown = 0; since = 1e9; aimOff = 0;
   dead = false; deadT = 0; flash = 0;
   frameIdx = 0; frameT = 0; wingHold = 0;
+  feathers = []; bolts = []; zapT = 0; zapOn = false; jit = [0, 0];
+  falling = false; offT = 0; deathRot = 0;
   ramp(0);
 }
 
@@ -145,9 +146,10 @@ function wantFlap(n) {
 }
 
 function step(dt) {
-  clock += dt;
   flash = Math.max(0, flash - dt * 3);
-  if (dead) { deadT += dt; if (deadT > 1.3) reset(); return; }
+  stepFeathers(dt);
+  if (dead) { stepDeath(dt); return; }
+  clock += dt;                 // world clock stops on death: ground, hills, clouds freeze
   ramp(score);
 
   since += speed * dt;
@@ -186,7 +188,90 @@ function step(dt) {
   }
 }
 
-function die() { dead = true; deadT = 0; flash = 1; }
+function birdRot() { return bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620); }
+
+function die() {
+  dead = true; deadT = 0; flash = 1;
+  deathRot = birdRot();
+  bird.vy = 0;
+  spawnFeathers(BIRD_X, bird.y);
+}
+
+const FEATHER_COLS = [C.birdY, C.birdY, C.birdD, C.birdC, "#ffffff"];
+function spawnFeathers(x, y) {
+  for (let i = 0; i < 34; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = 70 + Math.random() * 230;
+    feathers.push({
+      x: x + (Math.random() * 2 - 1) * 8,
+      y: y + (Math.random() * 2 - 1) * 6,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v - 90,           // bias upward so they puff out, then drift down
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() * 2 - 1) * 9,
+      ph: Math.random() * Math.PI * 2,
+      fr: 4 + Math.random() * 4,
+      len: Math.random() < 0.35 ? 6 : 4,
+      col: FEATHER_COLS[(Math.random() * FEATHER_COLS.length) | 0]
+    });
+  }
+}
+
+function stepFeathers(dt) {
+  if (!feathers.length) return;
+  const drag = Math.exp(-3.2 * dt);
+  for (const f of feathers) {
+    f.vx *= drag;
+    f.vy = Math.min(f.vy * drag + 420 * dt, 55);   // light: low terminal velocity
+    f.ph += f.fr * dt;
+    f.x += (f.vx + Math.sin(f.ph) * 28) * dt;       // side-to-side flutter
+    f.y += f.vy * dt;
+    f.rot += (f.vr + Math.cos(f.ph) * 3) * dt;
+  }
+  feathers = feathers.filter(f => f.y < H + 10 && f.x > -20 && f.x < W + 20);
+}
+
+function makeBolts() {
+  const out = [];
+  const n = 3 + ((Math.random() * 3) | 0);
+  for (let b = 0; b < n; b++) {
+    let a = Math.random() * Math.PI * 2;
+    let x = BIRD_X + Math.cos(a) * 8, y = bird.y + Math.sin(a) * 6;
+    const pts = [[Math.round(x), Math.round(y)]];
+    const segs = 3 + ((Math.random() * 3) | 0);
+    for (let i = 0; i < segs; i++) {
+      a += (Math.random() * 2 - 1) * 0.9;
+      const l = 6 + Math.random() * 8;
+      x += Math.cos(a) * l; y += Math.sin(a) * l;
+      pts.push([Math.round(x), Math.round(y)]);
+    }
+    out.push(pts);
+  }
+  return out;
+}
+
+function stepDeath(dt) {
+  deadT += dt;
+  if (deadT < D_FREEZE) return;                 // frozen in place
+  if (deadT < D_ZAP) {                          // electrocution
+    zapT -= dt;
+    if (zapT <= 0) {
+      zapT = 0.045 + Math.random() * 0.03;
+      zapOn = !zapOn;
+      bolts = makeBolts();
+      jit = [Math.round((Math.random() * 2 - 1) * 2), Math.round((Math.random() * 2 - 1) * 2)];
+      if (Math.random() < 0.35) flash = Math.max(flash, 0.45);
+    }
+    return;
+  }
+  if (!falling) {                               // flip and drop
+    falling = true; bolts = []; zapOn = false; jit = [0, 0];
+    bird.vy = -D_HOP;
+  }
+  bird.vy = Math.min(bird.vy + GRAVITY * dt, 900);
+  bird.y += bird.vy * dt;
+  if (bird.y - SPR_H > H) { offT += dt; if (offT > D_REST) reset(); }
+}
 
 /* ---------- bird sprite: 17x12 authored, 34x24 rendered ---------- */
 const FRAMES = [
@@ -196,26 +281,45 @@ const FRAMES = [
   "......................KKKKKKK........KKYYYYYWWK......KYYYYYYYWWWK.....KYYYYYYYWWWKK...KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDDCCCCCRRK..KDDDDDCCCCCCOOK...KYYYCCCCCKKKK......KKKKKKK......................."
 ];
 const SPR = { K: C.ink, Y: C.birdY, D: C.birdD, C: C.birdC, W: C.eye, R: C.beak, O: C.beakLo };
+/* electrocuted "x-ray" palette: glowing outline, dark body */
+const SPR_ZAP = { K: "#fffbe0", Y: "#2a2f7a", D: "#151845", C: "#3a4290", W: "#ffffff", R: "#7f8cff", O: "#4a55c0" };
 
 /* ---------- paint ---------- */
 const cvs = document.getElementById("game");
-const ctx = cvs.getContext("2d", { alpha: false });
-let N = 2, DEV = 2;
+const vctx = cvs.getContext("2d", { alpha: false });   // what the viewer sees
+const buf = document.createElement("canvas");             // the scene is painted here
+const ctx = buf.getContext("2d", { alpha: false });
+const stage = document.getElementById("stage");
+let R = 2, DS = 2;   // R = buffer pixels per logical px (integer), DS = device px per logical px
 
 function fit() {
-  // N = CSS multiple of the logical grid, DEV = backing multiple. DEV must be
-  // an exact integer multiple of N, or the scanlines alias.
-  let n = Math.max(2, Math.min(3, Math.floor((innerHeight - 120) / H)));
-  let d = Math.max(1, Math.round(devicePixelRatio || 1));
-  N = n; DEV = n * d;
-  cvs.width = W * DEV; cvs.height = H * DEV;
-  cvs.style.width = (W * N) + "px";
-  cvs.style.height = (H * N) + "px";
-  ctx.setTransform(DEV, 0, 0, DEV, 0, 0);
+  // The stage is whatever space CSS leaves between the gutters and the caption,
+  // so this works the same on phones, in iframes and with the address bar moving.
+  const box = stage.getBoundingClientRect();
+  if (box.width < 1 || box.height < 1) return;
+  const dpr = devicePixelRatio || 1;
+  DS = Math.min(box.width / W, box.height / H) * dpr;
+  const devW = Math.max(1, Math.floor(W * DS)), devH = Math.max(1, Math.floor(H * DS));
+  DS = Math.min(devW / W, devH / H);
+  if (cvs.width !== devW || cvs.height !== devH) {
+    // display canvas = exact device pixels, so the scanlines land on real rows
+    cvs.width = devW; cvs.height = devH;
+    cvs.style.width = (devW / dpr) + "px";
+    cvs.style.height = (devH / dpr) + "px";
+  }
+  // scene buffer = largest whole multiple of the grid not above the device size;
+  // it is then stretched (nearest-neighbour) by a factor in [1, 2)
+  const r = Math.max(1, Math.floor(DS));
+  if (r !== R || buf.width !== W * r) { R = r; buf.width = W * R; buf.height = H * R; }
+  ctx.setTransform(R, 0, 0, R, 0, 0);
   ctx.imageSmoothingEnabled = false;
+  vctx.imageSmoothingEnabled = false;
 }
 fit();
 addEventListener("resize", fit);
+addEventListener("orientationchange", fit);
+if (window.ResizeObserver) new ResizeObserver(fit).observe(stage);   // caption reflow, toolbars, iframes
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
 
 function px(x, y, w, h, col) {
   ctx.fillStyle = col;
@@ -282,18 +386,61 @@ function ground() {
 
 function drawBird() {
   const f = FRAMES[frameIdx] || FRAMES[0];
+  const pal = dead && zapOn ? SPR_ZAP : SPR;
   ctx.save();
-  ctx.translate(Math.round(BIRD_X), Math.round(bird.y));
-  ctx.rotate(bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620));
+  if (!dead) {
+    ctx.translate(Math.round(BIRD_X), Math.round(bird.y));
+    ctx.rotate(birdRot());
+  } else if (!falling) {
+    ctx.translate(Math.round(BIRD_X) + jit[0], Math.round(bird.y) + jit[1]);
+    ctx.rotate(deathRot);
+  } else {
+    ctx.translate(Math.round(BIRD_X), Math.round(bird.y));
+    ctx.scale(1, -1);                            // belly up
+    ctx.rotate(Math.min(0.5, (deadT - D_ZAP) * 0.6));
+  }
   for (let y = 0; y < BH; y++) {
     for (let x = 0; x < BW; x++) {
-      const col = SPR[f.charAt(y * BW + x)];
+      const col = pal[f.charAt(y * BW + x)];
       if (!col) continue;
       ctx.fillStyle = col;
       ctx.fillRect((x * BS) - (SPR_W >> 1), (y * BS) - (SPR_H >> 1), BS, BS);
     }
   }
   ctx.restore();
+}
+
+function drawFeathers() {
+  for (const f of feathers) {
+    ctx.save();
+    ctx.translate(Math.round(f.x), Math.round(f.y));
+    ctx.rotate(f.rot);
+    ctx.fillStyle = C.ink;
+    ctx.fillRect(-(f.len >> 1) - 1, -2, f.len + 2, 4);
+    ctx.fillStyle = f.col;
+    ctx.fillRect(-(f.len >> 1), -1, f.len, 2);
+    ctx.fillStyle = C.birdD;
+    ctx.fillRect(-(f.len >> 1), 0, 1, 1);        // quill
+    ctx.restore();
+  }
+}
+
+function boltLine(x0, y0, x1, y1, s, col) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1;
+  ctx.fillStyle = col;
+  for (let i = 0; i <= n; i++) {
+    const x = Math.round(x0 + (x1 - x0) * i / n), y = Math.round(y0 + (y1 - y0) * i / n);
+    ctx.fillRect(x - (s >> 1), y - (s >> 1), s, s);
+  }
+}
+
+function drawBolts() {
+  for (const pts of bolts) {
+    for (let i = 1; i < pts.length; i++) boltLine(pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1], 3, "#5fd8ff");
+  }
+  for (const pts of bolts) {
+    for (let i = 1; i < pts.length; i++) boltLine(pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1], 1, "#ffffff");
+  }
 }
 
 function outlineText(s, x, y, col, size) {
@@ -315,7 +462,13 @@ function draw() {
     pipePart(p.x, p.bot, SKY, false);
   }
   ground();
+  if (dead && zapOn && !falling) {               // electric glow behind the bird
+    ctx.fillStyle = "rgba(127,232,255,.28)";
+    ctx.fillRect(BIRD_X - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
+  }
   drawBird();
+  drawBolts();
+  drawFeathers();
 
   outlineText(String(score), W / 2, 72, "#ffffff", 32);
   ctx.font = "700 9px ui-monospace, monospace";
@@ -330,7 +483,7 @@ function draw() {
   ctx.fillRect(8, 22, 96, 5);
   ctx.fillStyle = C.birdY;
   ctx.fillRect(8, 22, 96 * k, 5);
-  if (cooldown > 0) {
+  if (cooldown > 0 && !dead) {
     ctx.fillStyle = "rgba(255,255,255,.55)";
     ctx.fillRect(8, 30, 96 * (cooldown / COOLD), 2);
     ctx.fillStyle = "rgba(255,255,255,.75)";
@@ -341,6 +494,8 @@ function draw() {
   if (dead) {
     ctx.fillStyle = "rgba(255,255,255," + (0.5 * flash) + ")";
     ctx.fillRect(0, 0, W, H);
+  }
+  if (dead && offT > 0) {
     ctx.fillStyle = "rgba(20,32,15,.92)";
     ctx.fillRect(W / 2 - 66, H / 2 - 34, 132, 66);
     ctx.textAlign = "center";
@@ -354,14 +509,12 @@ function draw() {
     ctx.textAlign = "left";
   }
 
-  /* scanlines drawn in DEVICE pixels at an integer period, so the spacing
-     is exact at any devicePixelRatio. This is what the irregular lines were:
-     a 3-logical-px overlay landing on fractional device rows. */
-  const O = Math.max(3, Math.round(3 * (DEV / N)));
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = "rgba(0,0,0,.15)";
-  for (let y = 0; y < H * DEV; y += O) ctx.fillRect(0, y, W * DEV, 1);
-  ctx.setTransform(DEV, 0, 0, DEV, 0, 0);
+  /* blit the scene to the display canvas, then draw scanlines in DEVICE
+     pixels at an integer period (~1.5 logical px) so the spacing is exact. */
+  vctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
+  const O = Math.max(3, Math.round(1.5 * DS));
+  vctx.fillStyle = "rgba(0,0,0,.15)";
+  for (let y = 0; y < cvs.height; y += O) vctx.fillRect(0, y, cvs.width, 1);
 }
 
 reset();
@@ -377,10 +530,3 @@ requestAnimationFrame(loop);
 </script>
 </body>
 </html>
-
-							<script>
-                            	
-							</script>
-                        </body>
-                        </html>
-                    

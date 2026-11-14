@@ -43,7 +43,7 @@ def emit(mode, frames=20):
     finally: data=sys.stdout.getvalue(); sys.stdout=old
     return data
 
-print("1. PHYSICS GATE - the renderer must not have changed the game")
+print("\n1. PHYSICS GATE - the game must stay the game it is meant to be")
 stats=[]
 for i in range(20):
     gg=m.Game(1+i*7919)
@@ -53,9 +53,119 @@ for i in range(20):
 check(len(stats)==20, "all 20 seeded games eventually die", "died %d/20" % len(stats))
 check(min(stats)>=40, "no game dies before pipe 40", "earliest death score %d" % min(stats))
 check(m.SAFE>0, "asymptote remains geometrically possible", "SAFE=%.1f" % m.SAFE)
-for name,val in [("GRAV_F",0.20),("APEX_T",0.30),("PIPE_W",29),("GAP0",20.0),("GAP1",16.0),
-                 ("HW",3.9),("HH",3.0),("COOLD",0.50)]:
-    check(abs(getattr(m,name)-val)<1e-9, "physics constant %s unchanged" % name, str(val))
+# thrust/speed/pipe width are the original's and must not move. GAP and the
+# hitbox DID move, deliberately and together: an honest hitbox the size of the
+# drawn sprite needs more sky, exactly as the reference raised its floor when it
+# drew its bird 2x.
+for name,val in [("GRAV_F",0.20),("APEX_T",0.30),("PIPE_W",29),("COOLD",0.50),
+                 ("GAP0",24.0),("GAP1",20.0),("HW",8.5),("HTOP",5.0),("HBOT",5.0)]:
+    check(abs(getattr(m,name)-val)<1e-9, "physics constant %s as intended" % name, str(val))
+check(m.HTOP==m.HBOT, "collision clearance is symmetric about the physics centre",
+      "HTOP %.1f HBOT %.1f  (the old single HH put all slack above it)"
+      % (m.HTOP,m.HBOT))
+
+print("\n1b. COLLISION HONESTY - what the viewer sees must match what kills")
+# The bug this gate exists for: the box was 7.8x6.0 inside a 17x10 sprite and
+# all its forgiveness sat ABOVE the centre, so the bird visibly entered the
+# upper pipe while still alive - measured at 5.7% of live frames, 99.8% upper.
+check((m.HW,m.HTOP,m.HBOT)==(m.BIRD_W/2.0,m.BIRD_H/2.0,m.BIRD_H/2.0),
+      "hitbox is the drawn sprite, not a smaller box next to it",
+      "box %.1fx%.1f vs sprite %dx%d" % (2*m.HW,m.HTOP+m.HBOT,m.BIRD_W,m.BIRD_H))
+# every sprite row must be one ink run, or ink_hits_pipe's per-row interval
+# would be conservative rather than exact
+for pn,pose in (("WING_UP",m.WING_UP),("WING_MID",m.WING_MID),("WING_DOWN",m.WING_DOWN)):
+    ok=True
+    for r in range(m.BIRD_H):
+        rw=list(m.BIRD_BODY[r])
+        for (pr,pc,pat) in pose:
+            for i,ch in enumerate(pat): rw[pr+i]=ch
+        cs=[c for c in range(m.BIRD_W) if rw[c]!="."]
+        if cs and cs[-1]-cs[0]+1!=len(cs): ok=False
+    check(ok, "%s: every row is one contiguous ink run (per-row test is exact)" % pn)
+# the real oracle: rasterise, then intersect the drawn bird's pixels with the
+# drawn pipe's pixels.  Any hit is a frame where the picture contradicts the
+# physics, which is the entire complaint this fix answers.
+# pipe materials DERIVED from the band lists, never typed.  And the bird's set
+# needs no list at all: draw_bird is the only caller of Scene.put, so whatever
+# put() is handed IS bird ink.  That matters - a hand-typed bird list left out
+# the outline material "ink", which is 2/3 of the sprite's painted pixels, and
+# undercounted the overlap this gate exists to catch.
+PIPEMAT={mn for _o,_w,mn in list(m.SHAFT)+list(m.LIP)}
+S={"pipe":set(),"bird":set()}
+_orig_rect,_orig_put=m.Scene.rect,m.Scene.put
+def _hook_rect(s,x,y,w,h,c,mtr):
+    if mtr in PIPEMAT:
+        for yy in range(int(y),int(y+h)):
+            if 0<=yy<m.SH:
+                for xx in range(max(0,int(x)),min(m.SW,int(x+w))): S["pipe"].add((xx,yy))
+    return _orig_rect(s,x,y,w,h,c,mtr)
+def _hook_put(s,y,x,c,mtr):
+    if 0<=y<m.SH and 0<=x<m.SW: S["bird"].add((x,y))
+    return _orig_put(s,y,x,c,mtr)
+m.Scene.rect,m.Scene.put=_hook_rect,_hook_put
+tot=ov=up=0
+worst=0; where=None
+for seed in range(1,7):
+    g=m.Game(seed); sc=m.Scene()
+    for _ in range(int(60*150)):
+        g.step(m.FIXED)
+        if g.dead: break
+        S["pipe"].clear(); S["bird"].clear()
+        m.paint(sc,g,0.0,m.COL256)
+        tot+=1
+        hit=S["bird"]&S["pipe"]
+        if not hit: continue
+        ov+=1
+        if sum(y for _,y in hit)/len(hit)<m.SKY/2: up+=1
+        if len(hit)>worst:
+            worst=len(hit)
+            ys=sorted(y for _,y in hit); xs=sorted(x for x,_ in hit)
+            where="x %d..%d y %d..%d" % (xs[0],xs[-1],ys[0],ys[-1])
+m.Scene.rect,m.Scene.put=_orig_rect,_orig_put
+check(ov==0, "no live frame paints bird ink over pipe ink",
+      "%d/%d frames overlap (%d upper), worst %d px at %s" % (ov,tot,up,worst,where))
+check(ov==0 and up==0, "upper pipe in particular stays clear", "%d upper-pipe frames" % up)
+
+# the mirror: a hitbox BIGGER than the art kills at a distance, which is the
+# same complaint reversed.  Every death must show contact in the painted scene.
+# The ground is allowed edge contact rather than a shared pixel: its band starts
+# at SKY and the sprite's last ink row is round(y)+BIRD_H/2-1, so a legal ground
+# death lands the bottom edge on the grass line with no row in common.
+GROUNDMAT={"grass","grassDark"}
+S2={"pipe":set(),"ground":set(),"bird":set()}
+def _hook_rect2(s,x,y,w,h,c,mtr):
+    bk="pipe" if mtr in PIPEMAT else ("ground" if mtr in GROUNDMAT else None)
+    if bk:
+        for yy in range(int(y),int(y+h)):
+            if 0<=yy<m.SH:
+                for xx in range(max(0,int(x)),min(m.SW,int(x+w))): S2[bk].add((xx,yy))
+    return _orig_rect(s,x,y,w,h,c,mtr)
+def _hook_put2(s,y,x,c,mtr):
+    if 0<=y<m.SH and 0<=x<m.SW: S2["bird"].add((x,y))
+    return _orig_put(s,y,x,c,mtr)
+m.Scene.rect,m.Scene.put=_hook_rect2,_hook_put2
+dth=pix=edge=phantom=0; pnote=None
+for seed in range(1,21):
+    g=m.Game(seed); sc=m.Scene()
+    for _ in range(int(60*400)):
+        g.step(m.FIXED)
+        if not g.dead: continue
+        dth+=1
+        S2["pipe"].clear(); S2["ground"].clear(); S2["bird"].clear()
+        m.paint(sc,g,0.0,m.COL256)
+        b=S2["bird"]; gt=min(y for _,y in S2["ground"])
+        if b&S2["pipe"]: pix+=1
+        elif b and (b&S2["ground"] or max(y for _,y in b)+1==gt): edge+=1
+        else:
+            phantom+=1
+            pnote="seed %d y=%.2f ink rows %d..%d vs grass top %d"%(
+                seed,g.y,min(y for _,y in b),max(y for _,y in b),gt)
+        break
+m.Scene.rect,m.Scene.put=_orig_rect,_orig_put
+check(dth==20, "20 seeded deaths captured for the contact test", "%d deaths" % dth)
+check(phantom==0, "no death happens without visible contact (no kill at a distance)",
+      "%d phantom: %s" % (phantom,pnote) if phantom else
+      "%d share a pixel with a pipe, %d rest on the ground" % (pix,edge))
 
 print("\n2. GLYPH LEGALITY - each mode may only emit glyphs its terminal has")
 CP437_OK=set(" \u2588\u2580\u2584\u258c\u2590\u2591\u2592\u2593")

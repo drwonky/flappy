@@ -56,8 +56,12 @@ FALLBACKS ARE NOT COSMETIC:
           what the set actually has (' ' < '·' < '-' < chequerboard < '◆') plus
           SGR 7 reverse video, ordered-dithered on the cell grid.
 
-PHYSICS are copied unchanged from flappy-vt100.py, so --selftest must print the
-same crash statistics it always did.  That is the regression gate.
+PHYSICS start from flappy-vt100.py, and the thrust, gravity, speed and pipe
+width are still its.  What moved is the hitbox and the gap it needs: the hitbox
+is now the drawn sprite, not a smaller box beside it.  --selftest therefore
+prints BETTER crash statistics than flappy-vt100.py does (the honest box is
+bigger, and the pilot's safe-flap zone is unchanged at 2.4 sub-rows); the gate
+is that the zone stays positive and no seeded game dies before pipe 40.
 """
 import sys, time, math, random
 
@@ -69,7 +73,7 @@ GROUND     = 10
 SKY        = SH - GROUND
 FIXED      = 1.0/60
 
-# ---------- physics, all in SUB-PIXELS (unchanged from flappy-vt100.py) ----------
+# ---------- physics, all in SUB-PIXELS (seeded from flappy-vt100.py) ----------
 # Quoted original constants are per-frame at 60fps (gravity 0.5, flap -9) on a
 # 512-tall screen with 400 of sky: one flap rises 81px = 0.203 of sky and takes
 # 18 frames = 0.30s. Hover costs 2F/g = 0.36 of sky, i.e. 0.60s between flaps.
@@ -81,14 +85,24 @@ HOVER   = 2.0*FLAP/GRAV          # 0.60s
 COOLD   = 0.50                   # < HOVER: hover possible but costs 83% of flaps
 MAXVY   = 1.40*SKY
 BIRD_X  = 0.278*SW
-HW, HH  = 3.9, 3.0               # hitbox UNCHANGED; only the drawn sprite grew
+# The hitbox IS the drawn sprite, and the collision test below walks the sprite's
+# own ink rows -- not a box invented separately from the art.  It used to be
+# 7.8x6.0 while the drawn bird was 17x10, and ONE number served as the clearance
+# BOTH above and below the physics centre while draw_bird anchored the sprite by
+# its INK BOTTOM: all the forgiveness sat above the centre, so the bird visibly
+# entered the UPPER pipe while the game still called it alive (measured: 5.7% of
+# live frames, 99.8% of them the upper pipe).  An honest box is 4 sub-rows
+# taller than the old one, so the gap had to grow to keep it flyable -- exactly
+# what the reference did when it drew its own bird 2x (its comment: "floor raised
+# from 96: the bird is 16 tall now").  Asserted against BIRD_W/BIRD_H below.
+HW, HTOP, HBOT = 8.5, 5.0, 5.0
 PIPE_W  = 29                     # 29/160 = 0.181 = original 52/288 screens
 SPD0, SPD1 = 0.4167*SW, 0.5600*SW   # original 120px/s on 288 wide
 SPC0, SPC1 = 0.625*SW, 0.500*SW     # original 169px on 288 -> 1.7 pipes visible
-GAP0, GAP1 = 20.0, 16.0
+GAP0, GAP1 = 24.0, 20.0          # raised from 20/16: see the hitbox note above
 TAU     = 85.0
 APEX    = FLAP*FLAP/(2*GRAV)
-SAFE    = (GAP1-2*HH)-APEX       # width of the safe-flap band at the asymptote
+SAFE    = (GAP1-HTOP-HBOT)-APEX  # width of the safe-flap band at the asymptote
 
 assert SAFE > 0, "asymptote is geometrically impossible"
 assert COOLD < HOVER and COOLD > 0.30
@@ -108,15 +122,15 @@ class Game:
     def spawn(s):
         top = 4 + s.rng.random()*(SKY-8-s.gap)
         s.pipes.append({"x": float(SW), "top": top, "bot": top+s.gap, "pass": False})
-        s.aim = (s.rng.random()*2-1)*(s.gap-2*HH)*0.12
+        s.aim = (s.rng.random()*2-1)*(s.gap-HTOP-HBOT)*0.12
     # Thrust is one-sided: flapping at y puts your apex at y-APEX, so to cross
-    # a gate you must enter no higher than top+HH+APEX (else you clip the upper
-    # pipe) and no lower than bot-HH. Riding the TOP of that window is a limit
+    # a gate you must enter no higher than top+HTOP+APEX (else you clip the upper
+    # pipe) and no lower than bot-HBOT. Riding the TOP of that window is a limit
     # cycle whose parabola spans exactly APEX. Aim blends to the next gate early
     # enough to sink/climb to it, since descending costs only an abstained flap.
-    def zlo(s, n): return n["top"]+HH+APEX
+    def zlo(s, n): return n["top"]+HTOP+APEX
     def want(s, n):
-        z, hi = s.zlo(n), n["bot"]-HH
+        z, hi = s.zlo(n), n["bot"]-HBOT
         if z >= hi: return s.y < 0.5*(n["top"]+n["bot"])
         m = next((p for p in s.pipes if p["x"] > n["x"]+PIPE_W), None)
         if m:
@@ -124,7 +138,7 @@ class Game:
             tT  = (n["x"]-(BIRD_X+HW))/s.speed
             if tT > T*0.55: z = min(z, s.zlo(m))
             if tT > T*0.30: z = max(z, s.zlo(m))
-        if s.y+HH >= SKY-1.0: return True
+        if s.y+HBOT >= SKY-1.0: return True
         return s.y >= z
     def step(s, dt):
         s.clock += dt; s.wing = max(0.0, s.wing-dt*4)
@@ -140,17 +154,17 @@ class Game:
         if n and s.cool <= 0 and s.want(n):
             s.vy, s.cool, s.wing = -FLAP, COOLD, 1.0; s.flaps += 1
         s.vy = min(s.vy+GRAV*dt, MAXVY); s.y += s.vy*dt
-        if s.y < HH: s.y, s.vy = HH, max(s.vy, 0.0)   # ceiling clamps: original
+        if s.y < HTOP: s.y, s.vy = HTOP, max(s.vy, 0.0)   # ceiling clamps: original
         for p in s.pipes:
             p["x"] -= s.speed*dt
             if not p["pass"] and p["x"]+PIPE_W < BIRD_X-HW:
                 p["pass"] = True; s.score += 1
                 if s.score > s.best: s.best = s.score
         s.pipes = [p for p in s.pipes if p["x"]+PIPE_W > -PIPE_W]
-        if s.y+HH >= SKY: s.die(); return             # only the ground kills
+        if s.y+HBOT >= SKY: s.die(); return           # only the ground kills
+        y0, runs, x0 = bird_ink(s)                    # the sprite's own ink
         for p in s.pipes:
-            if (BIRD_X+HW > p["x"] and BIRD_X-HW < p["x"]+PIPE_W and
-                (s.y-HH < p["top"] or s.y+HH > p["bot"])): s.die(); return
+            if ink_hits_pipe(p, y0, runs, x0): s.die(); return
     def die(s): s.dead, s.deadT = True, 0.0
 
 # ---------- the original's palette ----------
@@ -408,19 +422,89 @@ assert all(_FEAT[k]>=v for k,v in _MINFEAT.items()), \
        "features too thin for a 2-colour cell: %s" % {k:v for k,v in _FEAT.items()
                                                        if k in _MINFEAT and v<_MINFEAT[k]}
 
-def draw_bird(sc, g, COL):
-    x0 = int(round(BIRD_X)) - (BIRD_W//2)
-    # anchor by the INK BOTTOM, not the centre: at death the bird then comes
-    # to rest on top of the sand instead of sinking half its height into it.
-    y0 = int(round(g.y)) + int(round(HH)) - BIRD_H + 1
-    ph = g.wing
-    if ph > 0.60: pose = WING_UP
-    elif ph > 0.18: pose = WING_MID
-    else: pose = WING_DOWN
+def _pose_rows(pose):
+    """body with a wing pose composited over it, exactly as it will be painted."""
     rows=[list(r) for r in BIRD_BODY]
     for (r,c,pat) in pose:
         for i,ch in enumerate(pat):
             if 0<=r<BIRD_H and 0<=c+i<BIRD_W: rows[r][c+i]=ch
+    return rows
+
+def _ink_runs(rows):
+    """per sprite row, the sub-columns holding ink as (first, last) - or None.
+    The contiguity assert below is what lets a row be ONE interval, which is what
+    makes the collision test exactly pixel-exact rather than a bounding guess."""
+    out=[]
+    for r in range(BIRD_H):
+        cs=[c for c in range(BIRD_W) if rows[r][c]!="."]
+        out.append((cs[0],cs[-1]) if cs else None)
+    return out
+
+# The wing phase has exactly three values, so the sprite is one of three known
+# shapes.  Both are rasterised ONCE here and shared by the renderer and the
+# collision test: the shape that kills the bird is literally the same data the
+# picture is drawn from, and no step pays to re-derive it.
+POSE_AT   = (0.60, 0.18, None)     # g.wing above each threshold picks that pose
+POSE_TABLE = []
+for _i, _pose in enumerate((WING_UP, WING_MID, WING_DOWN)):
+    _rows = _pose_rows(_pose)
+    POSE_TABLE.append((_rows, _ink_runs(_rows)))
+
+def pose_of(g):
+    ph = g.wing
+    for i, th in enumerate(POSE_AT):
+        if th is None or ph > th: return POSE_TABLE[i]
+    return POSE_TABLE[-1]
+
+BIRD_Y0 = BIRD_H//2               # ink top sits this far above the physics centre
+
+def bird_ink(g):
+    """(ink top row, ink first/last column per row, ink left column) exactly as
+    draw_bird paints them.  Collision reads THIS, so the shape that kills the
+    bird can never again be a different shape from the one the viewer sees."""
+    return int(round(g.y))-BIRD_Y0, pose_of(g)[1], int(round(BIRD_X))-(BIRD_W//2)
+
+def ink_hits_pipe(p, y0, runs, x0):
+    """Does any INK pixel of the drawn bird land on a drawn pixel of pipe p?
+    Mirrors paint() exactly: pipe rows are int() truncations of p["top"]/
+    p["bot"], pipe columns are int(round(p["x"])), and the lip band overhangs
+    the shaft by CAP_X for CAP_H rows at the mouth of each pipe."""
+    px    = int(round(p["x"]))
+    top, bot = int(p["top"]), int(p["bot"])
+    for r in range(BIRD_H):
+        run = runs[r]
+        if run is None: continue
+        yy = y0+r
+        if top <= yy < bot: continue            # inside the drawn gap: all air
+        if yy < top and yy >= top-CAP_H:        # the upper lip overhangs
+            pl, pr = px-CAP_X, px+PIPE_W+CAP_X
+        elif yy >= bot and yy < bot+CAP_H:      # and the lower one
+            pl, pr = px-CAP_X, px+PIPE_W+CAP_X
+        else:
+            pl, pr = px, px+PIPE_W
+        if x0+run[0] < pr and x0+run[1] >= pl: return True
+    return False
+
+# The hitbox is the sprite, so it may not be authored independently of it.
+assert (HW, HTOP, HBOT) == (BIRD_W/2.0, BIRD_H/2.0, BIRD_H/2.0), \
+       "hitbox %s must be the drawn sprite 17x10, not a separate invention" % (
+        (HW, HTOP, HBOT),)
+# one interval per row is what makes ink_hits_pipe exact rather than
+# conservative: it checks the interval, so a row with a clear sub-pixel inside
+# it would report a hit that the viewer cannot see.  Checked on the very data
+# the collision test walks, so the assert cannot drift from it.
+for _t, (_rows, _runs) in enumerate(POSE_TABLE):
+    for _r in range(BIRD_H):
+        if _runs[_r] is None: continue
+        _cs=[c for c in range(BIRD_W) if _rows[_r][c]!="."]
+        assert _runs[_r]==(_cs[0],_cs[-1]) and _cs[-1]-_cs[0]+1==len(_cs), \
+               "sprite row %d of pose %d has a gap of clear sub-pixels: " \
+               "ink_hits_pipe would treat it as solid" % (_r,_t)
+
+def draw_bird(sc, g, COL):
+    x0 = int(round(BIRD_X)) - (BIRD_W//2)
+    y0 = int(round(g.y)) - BIRD_Y0
+    rows = pose_of(g)[0]
     for r in range(BIRD_H):
         yy=y0+r
         for c0 in range(BIRD_W):
@@ -797,7 +881,7 @@ def hud(g):
     elif g.score>=20: med=" SLVR"
     elif g.score>=10: med=" BRNZ"
     return (" FLAPPY-OPENCODE %3d BEST %3d%s GAP %4.1f ZONE %4.1f %s%s "
-            %(g.score,g.best,med,g.gap,(g.gap-2*HH)-APEX,
+            %(g.score,g.best,med,g.gap,(g.gap-HTOP-HBOT)-APEX,
               "#"*int(18*k),"."*(18-int(18*k))))
 
 def selftest(n, seed):

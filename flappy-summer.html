@@ -240,6 +240,11 @@ let sunPh = Math.random() * 6.283, sunSX = 0;
 let smoke = [], cacti = [];
 const dustW = { k: 1, target: 1, next: 0 }, smokeW = { k: 1, target: 1, next: 0 };
 let skin = 0, core = 0, shade = 0, flapEff = FLAP, gEff = GRAVITY, flaps = 0;
+let sweat = [], rayT = 0, shadeK = 0;                // sweat drops, sunbeam animation, eased shade
+/* A pipe's shadow can lie up to SUN.swing * SKY px to either side of it, so pipes
+   are born that far beyond the right edge and kept that far past the left one:
+   their shade scrolls on and off with them instead of popping in and out. */
+const REACH = Math.ceil(SUN.swing * SKY) + CAP_X + 4;
 
 
 function ramp(sc) {
@@ -260,15 +265,21 @@ function reset() {
   falling = false; offT = 0; deathRot = 0;
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
-  skin = 0; core = 0; shade = 0; flaps = 0; heatFx();
+  skin = 0; core = 0; shade = 0; shadeK = 0; flaps = 0; sweat = []; heatFx();
   ramp(0); gspd = speed;
+  firstPipes();
 }
 
-function spawn() {
+function spawn(x = W + REACH) {
   const top = 30 + Math.random() * (SKY - 60 - gap);
-  pipes.push({ x: W, top: top, bot: top + gap, passed: false });
+  pipes.push({ x: x, top: top, bot: top + gap, passed: false });
   aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
-  spawnCactus(W + PIPE_W / 2 + speed * spaceSec / 2);     // half way to the next pipe
+  spawnCactus(x + PIPE_W / 2 + speed * spaceSec / 2);     // half way to the next pipe
+}
+function firstPipes() {           // a new game: the first pipe at the right edge, as always,
+  let x = W;                      // and the ones behind it already out there in the glare
+  for (; x <= W + REACH; x += speed * spaceSec) spawn(x);
+  since = W + REACH - (x - speed * spaceSec);
 }
 
 function wantFlap(n) {
@@ -365,7 +376,7 @@ function step(dt) {
     p.x -= gspd * dt;
     if (!p.passed && p.x + PIPE_W < birdX - HW) { p.passed = true; score++; if (score > best) best = score; }
   }
-  pipes = pipes.filter(p => p.x + PIPE_W > -80);
+  pipes = pipes.filter(p => p.x + PIPE_W + CAP_X > -REACH);
   stepAir(dt);                     // after the pipes move, so nothing is left overlapping one
 
   if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(); return; }
@@ -515,7 +526,10 @@ function heatFx() {                                    // what the heat does to 
 function heatE() { return Math.min(1, core + 0.6 * skin); }
 function stepHeat(dt) {
   // how much of the bird is in shade: its head, middle and tail feathers
-  shade = (inShade(birdX, bird.y - HH + 2) + inShade(birdX, bird.y) + inShade(birdX, bird.y + HH - 2)) / 3;
+  for (let i = 0; i < 3; i++) LIT[i] = sunMul > 0 && !inShade(birdX, bird.y + LIT_DY[i]);
+  shade = 3 - LIT[0] - LIT[1] - LIT[2]; shade /= 3;
+  shadeK += (shade - shadeK) * (1 - Math.exp(-dt / 0.12));
+  rayT += dt;
   const sun = sunK() * (1.12 - 0.12 * smokeW.k);      // thick smoke takes the edge off
   skin += (HEAT.rate * sun * (1 - shade) - (HEAT.cool * shade + HEAT.air) * skin) * dt;
   skin = Math.max(0, Math.min(1, skin));
@@ -524,7 +538,13 @@ function stepHeat(dt) {
   if (skin > 0.3 && Math.random() < 14 * (skin - 0.2) * dt)   // heat shimmer coming off the bird
     addPart({ k: 1, x: birdX - 6 + Math.random() * 12, y: bird.y - HH - 2, vx: visU(airU) - gspd, vy: -35 - Math.random() * 25,
               age: 0, life: 0.5 + Math.random() * 0.4, col: Math.random() < 0.5 ? "#fff0c8" : "#ffc070", big: false });
+  if (shade < 1 && skin > 0.25 && Math.random() < 9 * (skin - 0.2) * dt)   // sweat flicked off the bird
+    sweat.push({ x: birdX + (Math.random() * 2 - 1) * 8, y: bird.y - 4 + Math.random() * 6,
+                 vx: -20 - Math.random() * 40, vy: -40 - Math.random() * 50, age: 0 });
+  for (const d of sweat) { d.age += dt; d.vy += 420 * dt; d.x += (d.vx - gspd) * dt; d.y += d.vy * dt; }
+  sweat = sweat.filter(d => d.y < SKY && d.age < 1.2);
 }
+const LIT = [false, false, false], LIT_DY = [-HH + 2, 0, HH - 2];   // head, middle, tail in the sun?
 /* smoke: big soft puffs far off behind the pipes, blowing in from the upwind edge.
    z is depth: far puffs drift slower and are fainter. */
 function puff(x, z) {
@@ -1138,14 +1158,68 @@ const HOT_PALS = [0, 1, 2, 3, 4].map(i => {         // yellow -> orange -> scorc
   return Object.assign({}, SPR, { Y: mixHex(C.birdY, "#ff5a1e", t), D: mixHex(C.birdD, "#b02a10", t), C: mixHex(C.birdC, "#ffb27a", t) });
 });
 function heatPal() { return HOT_PALS[Math.min(4, Math.round(heatE() * 4))]; }
-function drawHeatHud() {
-  const bw = 64, bx = W - 8 - bw, by = 44;
+/* What the sun is doing to the bird, drawn where you are looking: */
+function drawSunRays() {                          // 1. sunbeams onto every part of it that is in the sun
+  if (dead || sunMul <= 0) return;
+  const a = Math.min(0.85, 0.5 + 0.14 * sunK());
+  for (let i = 0; i < 3; i++) {
+    if (!LIT[i]) continue;                         // that part is in shade: the pipe has the beam
+    const x0 = birdX, y0 = bird.y + LIT_DY[i];       // the exact point the shade test used
+    for (let d = 12; d < y0; d += 2) {
+      if ((d + 7 * i + 4400 - (rayT * 150) % 4400) % 22 > 9) continue;   // dashes of light pouring down onto the bird
+      ctx.fillStyle = "rgba(255,246,196," + (a * Math.max(0.25, 1 - d / 260)).toFixed(3) + ")";
+      ctx.fillRect(Math.round(x0 + d * sunSX), Math.round(y0 - d), 2, 2);
+    }
+  }
+}
+function disc(cx, cy, r, col) {                   // a pixel circle, 2px rows
+  ctx.fillStyle = col;
+  for (let y = -r; y < r; y += 2) {
+    const h = Math.round(Math.sqrt(r * r - (y + 1) * (y + 1)));
+    ctx.fillRect(Math.round(cx - h), Math.round(cy + y), 2 * h, 2);
+  }
+}
+function drawBirdAura() {                          // 2. a hot glow in the sun, a cool one in shade
+  if (dead) return;
+  const e = heatE(), lit = 1 - shadeK, puls = 0.75 + 0.25 * Math.sin(airClock * 10);
+  if (lit > 0 && e > 0.08) disc(birdX, bird.y, 18, "rgba(255,110,30," + (lit * puls * (0.22 + 0.33 * e)).toFixed(3) + ")");
+  if (shadeK > 0 && skin > 0.02) disc(birdX, bird.y, 17, "rgba(130,215,255," + (shadeK * Math.min(0.38, 0.16 + skin)).toFixed(3) + ")");
+}
+function drawSweat() {
+  ctx.fillStyle = "#d6f2ff";
+  for (const d of sweat) ctx.fillRect(Math.round(d.x), Math.round(d.y), 1, 2);
+}
+function drawThermo() {                            // 3. a thermometer riding with the bird
+  if (dead || sunMul <= 0) return;
+  const x = Math.round(birdX) - 26, y = Math.round(bird.y) - 13, e = heatE();
+  const col = e > 0.6 ? "#ff3b1e" : e > 0.3 ? "#ff8a2a" : "#ffd040";
+  ctx.fillStyle = C.ink;
+  ctx.fillRect(x - 1, y - 1, 5, 21); ctx.fillRect(x - 2, y + 18, 7, 7);
+  ctx.fillStyle = "#fff6e0"; ctx.fillRect(x, y, 3, 19);
+  const h = Math.round(18 * Math.min(1, e + 0.06));
+  ctx.fillStyle = col; ctx.fillRect(x, y + 19 - h, 3, h); ctx.fillRect(x - 1, y + 19, 5, 5);
+  // heating up or cooling down: a little arrow beside it
+  const up = shadeK < 0.5, c = up ? "#ff6b2a" : "#7fd6ff", ax = x + 6, ay = y + 3;
+  if (!up && skin < 0.02) return;
+  ctx.fillStyle = C.ink;
+  ctx.fillRect(ax - 1, ay - 1, 5, 7);
+  ctx.fillStyle = c;
+  if (up) { ctx.fillRect(ax + 1, ay, 1, 5); ctx.fillRect(ax, ay + 1, 3, 1); }
+  else    { ctx.fillRect(ax + 1, ay, 1, 5); ctx.fillRect(ax, ay + 3, 3, 1); }
+}
+function drawHeatHud() {                           // 4. and spelled out in the corner
+  if (sunMul <= 0) { txt("SUN OFF", W - 8, 52, "rgba(255,255,255,.9)", F.hud, "right"); return; }
+  const e = heatE(), bw = 64, bx = W - 8 - bw, by = 57;
+  const warn = e > 0.7 && (airClock * 4 | 0) % 2 === 0;
+  const tcol = warn ? "#ff6b5b" : e > 0.6 ? "#ff8a5a" : e > 0.3 ? "#ffc070" : "rgba(255,255,255,.9)";
+  txt("BIRD " + Math.round(104 + 16 * e) + "F", W - 8, 52, tcol, F.hud, "right");
   ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fillRect(bx, by, bw, 5);
   ctx.fillStyle = "#c0301a"; ctx.fillRect(bx, by, Math.round(bw * core), 5);
   ctx.fillStyle = "#ffb03a"; ctx.fillRect(bx + Math.round(bw * core), by, Math.round(bw * Math.min(0.6 * skin, 1 - core)), 5);
-  const warn = heatE() > 0.7 && (airClock * 4 | 0) % 2 === 0;
-  const col = warn ? "#ff6b5b" : shade > 0.5 ? "#9fe0ff" : "rgba(255,255,255,.9)";
-  txt(shade > 0.5 ? "SHADE" : "HEAT", bx - 6, 52, col, F.hud, "right");
+  const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : "IN THE SUN";
+  txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
+  const fx = Math.round(100 * (1 - flapEff / FLAP));
+  if (fx >= 1) txt("FLAP -" + fx + "%", W - 8, 96, fx > 20 ? "#ff8a5a" : "rgba(255,255,255,.8)", F.hud, "right");
 }
 
 function drawBird() {
@@ -1240,7 +1314,11 @@ function draw() {
     ctx.fillStyle = "rgba(127,232,255,.28)";
     ctx.fillRect(birdX - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
   }
+  drawSunRays();
+  drawBirdAura();
+  drawSweat();
   drawBird();
+  drawThermo();
   drawDustLeaves(true);                          // the near leaves pass in front of the bird
   drawBolts();
   drawFeathers();

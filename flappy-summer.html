@@ -30,9 +30,8 @@
   #stage{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center}
   canvas{flex:none;display:block;image-rendering:pixelated;image-rendering:crisp-edges;
     box-shadow:0 14px 44px rgba(0,0,0,.6);border-radius:3px;touch-action:none}
-  /* 576px = 36 glyphs of the 16px advance; never wider than the viewport. */
-  #hud{flex:none;text-align:center;text-transform:uppercase;max-width:min(576px,100%)}
-  #hud b{color:#e6edf3}
+    /* just a revision tag: one short line, so the play area keeps the room */
+  #hud{flex:none;text-align:center;text-transform:uppercase;white-space:nowrap;line-height:1;color:#4a545c}
   /* WIND control: a native range input (mouse, touch, keyboard all for free), log scale */
   #windctl{flex:none;display:flex;align-items:center;gap:10px;width:min(400px,100%);
     text-transform:uppercase;color:#e6edf3;user-select:none;-webkit-user-select:none}
@@ -57,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">sun</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">autopilot, no input. <b>summer</b>: dust and wildfire smoke ride the wind, and the <b>sun</b> bakes the bird - it cools off in the <b>shade</b> the pipes cast, and smokes when it cooks. <b>sand</b> drifts up across games until a gap fills and the wind <b>blows it clear</b>. more sun, faster heat</div>
+<div id="hud">summer r4</div>
 
 <script>
 "use strict";

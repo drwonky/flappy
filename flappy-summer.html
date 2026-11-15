@@ -56,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">sun</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">summer r5</div>
+<div id="hud">summer r6</div>
 
 <script>
 "use strict";
@@ -372,7 +372,6 @@ function step(dt) {
   let n = null;
   for (const p of pipes) { if (p.x + PIPE_W > birdX - HW) { n = p; break; } }
   stepHeat(dt);
-  stepTrail(dt);
   plowSand();
   if (n && cooldown <= 0 && wantFlap(n)) {
     bird.vy = -flapEff;                          // a cooked bird beats weaker
@@ -398,6 +397,7 @@ function step(dt) {
   }
   pipes = pipes.filter(p => p.x + PIPE_W + CAP_X > -REACH);
   stepAir(dt);                     // after the pipes move, so nothing is left overlapping one
+  stepTrail(dt);
 
   if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(); return; }
   for (const p of pipes) {
@@ -570,16 +570,30 @@ function stepTrail(dt) {
     const c = e < 0.5 ? TRAIL_COLS[0].map((v, i) => v + (TRAIL_COLS[1][i] - v) * e * 2)
                       : TRAIL_COLS[1].map((v, i) => v + (TRAIL_COLS[2][i] - v) * (e - 0.5) * 2);
     trail.push({ x: birdX - 7 + Math.random() * 5, y: bird.y - 3 + Math.random() * 5,
-                 r: 1.5 + 2.5 * e, g: 3 + 5 * e, age: 0, life: 0.8 + 1.4 * e,
+                 vx: -gspd, vy: -10, r: 1.5 + 2.5 * e, g: 3 + 5 * e, age: 0, life: 0.8 + 1.4 * e,
                  a: 0.5 + 0.4 * e, col: "rgb(" + c.map(Math.round).join(",") + ")",
                  ember: e > 0.55 && Math.random() < e - 0.4 });
   }
-  const u = visU(airU) * 0.6 - gspd;
-  for (const p of trail) { p.age += dt; p.r += p.g * dt; p.x += u * dt; p.y -= (10 + 8 * p.age) * dt; }
+  for (const p of trail) {                           // the same air as the dust: around the pipes, never through
+    p.age += dt; p.r += p.g * dt;
+    windAt(p.x, p.y); pipeFlow(p.x, p.y);
+    const vAir = Math.max(-STORM.vAirMax, Math.min(STORM.vAirMax, WA.a)) + PF.v;
+    p.vx += (visU(WA.u) * PF.u - gspd - p.vx) * (1 - Math.exp(-5 * dt));        // heavier than dust: it eases into the flow
+    p.vy += (-(10 + 8 * p.age) + vAir - p.vy) * (1 - Math.exp(-5 * dt));       // and rises, being hot
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    keepOut(p, 1, 1, 1, 1);
+  }
   trail = trail.filter(p => p.age < p.life && p.x > -p.r - 4 && p.y > -p.r - 4);
   if (trail.length > 120) trail.splice(0, trail.length - 120);
 }
 function drawTrail() {
+  if (!trail.length) return;
+  ctx.save();                                        // a puff can be wider than the gap it is in:
+  ctx.beginPath();                                   // paint it everywhere EXCEPT on a pipe
+  ctx.rect(0, 0, W, H);
+  for (const p of pipes) for (const q of pipeRects(p))
+    ctx.rect(q[0], Math.max(-1, q[1]), q[2] - q[0], Math.min(H + 1, q[3]) - Math.max(-1, q[1]));
+  ctx.clip("evenodd");
   for (const p of trail) {
     const f = 1 - p.age / p.life;
     ctx.globalAlpha = p.a * f;
@@ -590,7 +604,7 @@ function drawTrail() {
       ctx.fillRect(Math.round(p.x), Math.round(p.y + p.r * 0.3), 1, 1);
     }
   }
-  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 function stepSand(dt) {

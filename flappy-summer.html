@@ -56,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">sun</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">summer r4</div>
+<div id="hud">summer r5</div>
 
 <script>
 "use strict";
@@ -255,7 +255,7 @@ let clearT = 0, clearFrom = 0, clears = 0, saveT = 0;
 let trail = [];                                       // smoke pouring off a hot bird
 const dustW = { k: 1, target: 1, next: 0 }, smokeW = { k: 1, target: 1, next: 0 };
 let skin = 0, core = 0, shade = 0, flapEff = FLAP, gEff = GRAVITY, flaps = 0;
-let sweat = [], rayT = 0, shadeK = 0;                // sweat drops, sunbeam animation, eased shade
+let sweat = [], shadeK = 0;                          // sweat drops, eased shade
 /* A pipe's shadow can lie up to SUN.swing * SKY px to either side of it, so pipes
    are born that far beyond the right edge and kept that far past the left one:
    their shade scrolls on and off with them instead of popping in and out. */
@@ -549,7 +549,6 @@ function stepHeat(dt) {
   for (let i = 0; i < 3; i++) LIT[i] = sunMul > 0 && !inShade(birdX, bird.y + LIT_DY[i]);
   shade = 3 - LIT[0] - LIT[1] - LIT[2]; shade /= 3;
   shadeK += (shade - shadeK) * (1 - Math.exp(-dt / 0.12));
-  rayT += dt;
   const sun = sunK() * (1.12 - 0.12 * smokeW.k);      // thick smoke takes the edge off
   skin += (HEAT.rate * sun * (1 - shade) - (HEAT.cool * shade + HEAT.air) * skin) * dt;
   skin = Math.max(0, Math.min(1, skin));
@@ -1283,19 +1282,6 @@ const HOT_PALS = [0, 1, 2, 3, 4].map(i => {         // yellow -> orange -> scorc
 });
 function heatPal() { return HOT_PALS[Math.min(4, Math.round(heatE() * 4))]; }
 /* What the sun is doing to the bird, drawn where you are looking: */
-function drawSunRays() {                          // 1. sunbeams onto every part of it that is in the sun
-  if (dead || sunMul <= 0) return;
-  const a = Math.min(0.85, 0.5 + 0.14 * sunK());
-  for (let i = 0; i < 3; i++) {
-    if (!LIT[i]) continue;                         // that part is in shade: the pipe has the beam
-    const x0 = birdX, y0 = bird.y + LIT_DY[i];       // the exact point the shade test used
-    for (let d = 12; d < y0; d += 2) {
-      if ((d + 7 * i + 4400 - (rayT * 150) % 4400) % 22 > 9) continue;   // dashes of light pouring down onto the bird
-      ctx.fillStyle = "rgba(255,246,196," + (a * Math.max(0.25, 1 - d / 260)).toFixed(3) + ")";
-      ctx.fillRect(Math.round(x0 + d * sunSX), Math.round(y0 - d), 2, 2);
-    }
-  }
-}
 function disc(cx, cy, r, col) {                   // a pixel circle, 2px rows
   ctx.fillStyle = col;
   for (let y = -r; y < r; y += 2) {
@@ -1461,7 +1447,6 @@ function draw() {
     ctx.fillRect(birdX - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
   }
   drawTrail();
-  drawSunRays();
   drawBirdAura();
   drawSweat();
   drawBird();

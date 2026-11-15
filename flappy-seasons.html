@@ -56,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">seasons r1</div>
+<div id="hud">seasons r2</div>
 
 <script>
 "use strict";
@@ -177,7 +177,12 @@ function windCool() {
    in the cold. Wind erodes the snow and the sand, the sun melts the snow, and the sun
    melts the ice off the bird. */
 const SNOW = { rate: 1.1, density: 0.0026, fallMin: 0.55, fallMax: 1.45, ledgeMax: 4 };
-const COVER = { erode: 0.035, erodeAt: 10, melt: 1.4, meltAt: 0.25, block: 24, clear: 2.5 };
+const COVER = { erode: 0.035, erodeAt: 10, melt: 1.4, meltAt: 0.25, block: 24, clear: 2.5,
+  rainMelt: 1.6,      // snow melted per second by a full shower
+  glazeAt: 0.55,      // a shower heavier than this freezes into the snow as an ice crust
+  glaze: 2.0,         // snow turned to crust per second at a full shower (it packs to half the depth)
+  iceMelt: 0.35,      // the crust melts this much slower than snow, in sun or rain
+  wash: 1.8 };        // bare sand washed away per second by a full shower
 const ICE = {
   rate: 0.034,        // rime per second at x1 wind, in full winter
   shed: 0.012,        // rime knocked off per flap
@@ -275,7 +280,7 @@ const C = {
   grass:"#c48a4a", grassDark:"#8e5a2c",                              // baked crust, dry tufts
   sand:"#e0a85c", sandDark:"#c88c46",
   dune:"#eebb6c", duneShade:"#cf9550", duneEdge:"#9a6630",          // drifted sand
-  snow:"#f4f8fc", snowShade:"#d3e0ec", snowEdge:"#9cb0c4",           // and snow on top of it
+  snow:"#f4f8fc", snowShade:"#d3e0ec", snowEdge:"#9cb0c4", ice:"#c8ecff", iceShade:"#8cc6ea",           // and snow on top of it
   sun:"#fff3c2", sunGlow:"#ffd66e", shadow:"rgba(60,22,6,.30)",
   cactus:"#5f8a3a", cactusLt:"#86b450", cactusDk:"#3c5e22",
   pipeO:"#14200f", pipeLt:"#8ed04a", pipeHi:"#74bf2e", pipeMid:"#5aa81f", pipeLo:"#3d7a12",
@@ -338,10 +343,11 @@ let smoke = [], cacti = [];
    ?sand=N / ?snow=N set the depths. */
 const SAND = { rate: 0.7, max: 400, ledgeMax: 3 };
 const SAND_COLS = 34;                                    // a lip heap is 34 two-px columns
+let iceD = isFinite(saved.ice) ? saved.ice : 0;      // ice crust: rain frozen into the snow
 let sandD = qnum("sand") !== null ? Math.max(0, qnum("sand")) : isFinite(saved.sand) ? saved.sand : 0;
 let snowD = qnum("snow") !== null ? Math.max(0, qnum("snow")) : isFinite(saved.snow) ? saved.snow : 0;
 let clearKind = "";
-let clearT = 0, clearFrom = [0, 0], clears = 0, saveT = 0;
+let clearT = 0, clearFrom = [0, 0, 0], clears = 0, saveT = 0;
 let trail = [];                                       // smoke pouring off a hot bird
 const dustW = { k: 1, target: 1, next: 0 }, smokeW = { k: 1, target: 1, next: 0 };
 const skyEv = { k: 1, target: 1, t: 0, next: 8 + Math.random() * 20, dir: 1 };   // the sun's strength right now
@@ -635,7 +641,7 @@ function stepRain(dt) {
   for (const d of rain) {
     d.x += flow * dt; d.y += d.vy * dt; d.sl = flow / d.vy;
     const X = Math.round(d.x), Y = Math.round(d.y);
-    if (Y >= SKY - groundCoverH(d.x)) { d.dead = 1; splash(X, Math.round(SKY - groundCoverH(d.x)) - 1); continue; }
+    if (Y >= SKY - groundCoverH(d.x)) { d.dead = 1; splash(X, Math.round(SKY - groundCoverH(d.x)) - 1, groundSplash()); continue; }
     for (const p of pipes) {                          // the pipes are solid: it splashes where it hits
       if (X < p.x - CAP_X - 2 || X > p.x + PIPE_W + CAP_X + 2) continue;
       pipeRects(p);
@@ -646,7 +652,11 @@ function stepRain(dt) {
   for (const q of splashes) { q.age += dt; q.x -= gspd * dt; }
   splashes = splashes.filter(q => q.age < 0.18);
 }
-function splash(x, y) { if (splashes.length < 200) splashes.push({ x: x, y: y, age: 0 }); }
+function splash(x, y, col) { if (splashes.length < 200) splashes.push({ x: x, y: y, age: 0, col: col }); }
+function groundSplash() {                          // what the drop throws up: mud off bare sand, glitter off ice
+  const top = iceD > 0.3 ? "ice" : snowD > 0.5 ? "snow" : sandD > 0.5 ? "sand" : "";
+  return top === "sand" ? "rgba(196,150,96,.85)" : top === "ice" ? "rgba(240,252,255,.95)" : null;
+}
 function bowAlpha() {                              // fades in, holds, fades out - and only with the sun out
   if (bow <= 0) return 0;
   return Math.min(1, bow / 2.5, (10 - bow) / 1.5) * Math.max(0, Math.min(1, (skyEv.k - 0.6) / 0.3)) * Math.min(1, SW[0] * 2);
@@ -787,7 +797,7 @@ function drawTrail() {
   ctx.restore();
 }
 
-function coverD() { return sandD + snowD; }
+function coverD() { return sandD + snowD + iceD; }
 function stepCover(dt) {
   fallNext -= dt;                                      // snowfall comes and goes, like in the winter build
   if (fallNext <= 0) { fallNext = 8 + Math.random() * 8; fallTarget = randIn([SNOW.fallMin, SNOW.fallMax]); }
@@ -795,13 +805,13 @@ function stepCover(dt) {
   if (clearT > 0) {                                    // a gap closed: thaw / scour it all away
     clearT = Math.max(0, clearT - dt);
     const k = clearT / COVER.clear, e = k * k * (3 - 2 * k);
-    sandD = clearFrom[0] * e; snowD = clearFrom[1] * e;
+    sandD = clearFrom[0] * e; snowD = clearFrom[1] * e; iceD = clearFrom[2] * e;
     if (Math.random() < 40 * dt) { const x = Math.random() * W; spawnDust(x, SKY - groundCoverH(x) - 1, -60 - Math.random() * 60, coverCol()); }
   } else {
     sandD += SAND.rate * SFX.desert * dustW.k * dt;                       // blown in off the desert
     snowD += SNOW.rate * SFX.snow * fallK * dt;                           // and falling in winter
     const w = Math.abs(airU);                                             // the wind erodes it, loose snow first
-    let er = COVER.erode * Math.min(25, Math.max(0, w - COVER.erodeAt)) * (1 + gustE) * dt;
+    let er = COVER.erode * Math.min(25, Math.max(0, w - COVER.erodeAt)) * (1 + gustE) * dt / (1 + iceD / 2);   // a crust holds it down
     const s0 = snowD;
     snowD = Math.max(0, snowD - er * 1.5); er = Math.max(0, er - (s0 - snowD) / 1.5);
     sandD = Math.max(0, sandD - er);
@@ -814,15 +824,25 @@ function stepCover(dt) {
       snowD = Math.max(0, snowD - m);
       if (Math.random() < m * 60) { const x = Math.random() * W; spawnDust(x, SKY - groundCoverH(x) - 1, -30 - Math.random() * 30, "#eaf6ff"); }   // steam
     }
-    sandD = Math.min(SAND.max, sandD); snowD = Math.min(SAND.max, snowD);
+    if (rainK > 0.02) {                                                   // RAIN: melts the snow, freezes into it when heavy, washes the sand
+      const r = rainK * dt;
+      const gl = Math.min(snowD, COVER.glaze * Math.max(0, rainK - COVER.glazeAt) / (1 - COVER.glazeAt) * dt);
+      snowD -= gl; iceD += gl * 0.5;
+      snowD = Math.max(0, snowD - COVER.rainMelt * r);
+      iceD = Math.max(0, iceD - COVER.rainMelt * COVER.iceMelt * 0.3 * r);
+      const bare = Math.max(0, 1 - (snowD + iceD) / 4);                   // snow and ice keep the rain off the sand
+      sandD = Math.max(0, sandD - COVER.wash * bare * r);
+    }
+    if (iceD > 0 && m > 0) iceD = Math.max(0, iceD - m * COVER.iceMelt);  // the sun gets the crust too, slowly
+    sandD = Math.min(SAND.max, sandD); snowD = Math.min(SAND.max, snowD); iceD = Math.min(SAND.max, iceD);
     if (!dead) checkBlocked();
   }
   saveT -= dt;
   if (saveT <= 0) { saveT = 2; saveWorld(); }
 }
-function coverCol() { return Math.random() * coverD() < snowD ? "#ffffff" : C.sand; }   // what the wind is lifting
+function coverCol() { const r = Math.random() * (sandD + snowD); return r < snowD ? "#ffffff" : C.sand; }   // what the wind is lifting
 function saveWorld() {
-  try { localStorage.setItem(SEASON_KEY, JSON.stringify({ t: +seasonT.toFixed(1), sand: +sandD.toFixed(2), snow: +snowD.toFixed(2) })); } catch (e) {}
+  try { localStorage.setItem(SEASON_KEY, JSON.stringify({ t: +seasonT.toFixed(1), sand: +sandD.toFixed(2), snow: +snowD.toFixed(2), ice: +iceD.toFixed(2) })); } catch (e) {}
 }
 function pipeCoverH(p) { return coverD() * p.sf; }
 /* the heap on a lip, column i: flat while shallow, then a mound with slumped sides */
@@ -839,8 +859,8 @@ function gapLeft(p) {                                  // room left between the 
 function checkBlocked() {                              // a gap filled in on screen: clear it all
   for (const p of pipes)
     if (p.x < W - CAP_X && p.x + PIPE_W > 0 && gapLeft(p) < COVER.block) {
-      clearT = COVER.clear; clearFrom = [sandD, snowD]; clears++;
-      clearKind = snowD > sandD ? "THAW" : "BLOWN CLEAR";
+      clearT = COVER.clear; clearFrom = [sandD, snowD, iceD]; clears++;
+      clearKind = snowD + iceD > sandD ? "THAW" : "BLOWN CLEAR";
       return;
     }
 }
@@ -1450,21 +1470,30 @@ function clouds() {                                // fair-weather clouds; smoke
   ctx.globalAlpha = 1;
 }
 
-const BOW_COLS = ["#ff5a5a", "#ffa040", "#ffe14a", "#6ad860", "#4aa8ff", "#9a6aff"];
+/* a real rainbow is soft: the colours run into each other (violet inside, red outside),
+   the edges fade out into the sky, the sky inside the bow is a little brighter, and
+   you can see the sky through all of it. One radial gradient, one annulus, no seams. */
+const BOW = { r0: 152, r1: 198, alpha: 0.30, glow: 0.10,
+  stops: [[0, "150,90,255", 0], [0.14, "150,90,255", 1], [0.30, "70,140,255", 1], [0.46, "80,215,110", 1],
+          [0.62, "255,232,80", 1], [0.77, "255,160,60", 1], [0.90, "255,70,70", 1], [1, "255,70,70", 0]] };
 function drawRainbow() {                           // an arc standing opposite the sun
   const a = bowAlpha();
   if (a < 0.01) return;
-  const cx = Math.round(W / 2 - sunSX * 150), cy = SKY + 30, R = 190;
-  ctx.globalAlpha = 0.42 * a;
-  for (let b = 0; b < BOW_COLS.length; b++) {
-    const r = R - b * 3;
-    ctx.fillStyle = BOW_COLS[b];
-    for (let y = cy - r; y < SKY; y += 2) {
-      const dy = y + 1 - cy, x = Math.sqrt(Math.max(0, r * r - dy * dy)), w = Math.max(3, Math.round(Math.sqrt(Math.max(0, (r + 3) * (r + 3) - dy * dy)) - x));
-      ctx.fillRect(Math.round(cx - x - w), y, w, 2); ctx.fillRect(Math.round(cx + x), y, w, 2);
-    }
-  }
-  ctx.globalAlpha = 1;
+  const cx = W / 2 - sunSX * 150, cy = SKY + 30;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, SKY); ctx.clip();          // it stands on the horizon
+  const g = ctx.createRadialGradient(cx, cy, BOW.r0, cx, cy, BOW.r1);
+  for (const [o, c, k] of BOW.stops) g.addColorStop(o, "rgba(" + c + "," + k + ")");
+  ctx.globalAlpha = BOW.alpha * a;
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, cy, BOW.r1, Math.PI, 2 * Math.PI); ctx.arc(cx, cy, BOW.r0, 2 * Math.PI, Math.PI, true); ctx.closePath();
+  ctx.fill();
+  const h = ctx.createRadialGradient(cx, cy, 0, cx, cy, BOW.r0 + 4);   // the brighter sky inside the bow
+  h.addColorStop(0, "rgba(255,255,255,0)"); h.addColorStop(0.6, "rgba(255,255,255,0)"); h.addColorStop(0.97, "rgba(255,255,255,1)"); h.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.globalAlpha = BOW.glow * a;
+  ctx.fillStyle = h;
+  ctx.beginPath(); ctx.arc(cx, cy, BOW.r0 + 4, Math.PI, 2 * Math.PI); ctx.closePath(); ctx.fill();
+  ctx.restore();
 }
 const FLOWER_COLS = [["#ff8fb0", "#ffe14a"], ["#ffe14a", "#c87a20"], ["#ffffff", "#ffd23f"], ["#b98aff", "#fff0a0"], ["#ff5a5a", "#ffe14a"]];
 function hash1(k) { const t = Math.sin(k * 127.1 + 311.7) * 43758.5453; return t - Math.floor(t); }
@@ -1493,8 +1522,7 @@ function drawRain() {                              // behind the pipes (they are
     const X = Math.round(d.x), Y = Math.round(d.y), o = Math.round(d.sl * 2);
     ctx.fillRect(X, Y - 1, 1, 2); ctx.fillRect(X - o, Y - 3, 1, 2);
   }
-  ctx.fillStyle = "rgba(220,238,255,.8)";
-  for (const q of splashes) { const e = Math.round(q.age * 20); ctx.fillRect(Math.round(q.x) - 1 - e, Math.round(q.y) - e, 1, 1); ctx.fillRect(Math.round(q.x) + 1 + e, Math.round(q.y) - e, 1, 1); }
+  for (const q of splashes) { ctx.fillStyle = q.col || "rgba(220,238,255,.8)"; const e = Math.round(q.age * 20); ctx.fillRect(Math.round(q.x) - 1 - e, Math.round(q.y) - e, 1, 1); ctx.fillRect(Math.round(q.x) + 1 + e, Math.round(q.y) - e, 1, 1); }
 }
 function skyline() {                              // green hills (snow-capped in winter); mesas in summer
   const m = SW[1], cap = Math.min(14, Math.round(snowD * 0.25));
@@ -1665,14 +1693,23 @@ function drawSweat() {
 }
 /* the cover is sand underneath and snow on top, in proportion to how much of each */
 function snowFrac() { const D = coverD(); return D > 0 ? snowD / D : 0; }
+function iceFrac() { const D = coverD(); return D > 0 ? iceD / D : 0; }
+function iceCrust(x, y, w, h, glint) {             // a glassy crust: pale blue, bright top edge, a glint now and then
+  ctx.fillStyle = C.iceShade; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = C.ice; ctx.fillRect(x, y, w, Math.max(1, h - 1));
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(x, y, w, 1);
+  if (glint) { ctx.fillStyle = "#ffffff"; ctx.fillRect(x + (w >> 1), y - 1, 1, 1); }
+}
 function pipeSand(p) {                             // the heap on a bottom lip, plowed where the bird went
   const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), h = pipeCoverH(p), x0 = L - CAP_X - 1;
   if (h < 0.5) return;
-  const fs = snowFrac();
+  const fs = snowFrac(), fi = iceFrac();
   for (let i = 0; i < SAND_COLS; i++) {
-    const hc = Math.round(lipCol(h, i) - p.cut[i]);
-    if (hc <= 0) continue;
-    const hs = Math.round(hc * fs), hd = hc - hs, X = x0 + i * 2;     // snow on top, sand below
+    const hc0 = Math.round(lipCol(h, i) - p.cut[i]);
+    if (hc0 <= 0) continue;
+    const hi = Math.min(hc0, Math.round(hc0 * fi + (fi > 0.02 ? 0.5 : 0))), hc = hc0 - hi;   // the crust on top of it all
+    const hs = Math.round(hc * fs / Math.max(1e-6, 1 - fi)), hd = hc - hs, X = x0 + i * 2;     // snow on top, sand below
+    if (hi > 0) iceCrust(X, B - hc0, 2, hi, ((i * 7 + Math.round(p.x)) & 31) === 0);
     const lit = i < SAND_COLS * 0.6 ? 0.75 : 0.5;                    // lit from the left, like the pipes
     if (hd > 0) {
       ctx.fillStyle = C.duneEdge; ctx.fillRect(X, B - 1, 2, 1);
@@ -1685,19 +1722,21 @@ function pipeSand(p) {                             // the heap on a bottom lip, 
       ctx.fillStyle = C.snow; ctx.fillRect(X, B - hc, 2, Math.max(1, Math.ceil(hs * (lit + 0.05))));
     }
   }
-  const hl = Math.min(fs > 0.5 ? SNOW.ledgeMax : SAND.ledgeMax, Math.round(h * 0.3));
+  const hl = Math.min(fs + fi > 0.5 ? SNOW.ledgeMax : SAND.ledgeMax, Math.round(h * 0.3));
   if (hl > 0) {                                     // a crest on the ledges of the top lip
-    ctx.fillStyle = fs > 0.5 ? C.snow : C.dune;
+    ctx.fillStyle = fs + fi > 0.5 ? (fi > fs ? C.ice : C.snow) : C.dune;
     ctx.fillRect(L - CAP_X, T - CAP_H - hl, CAP_X, hl);
     ctx.fillRect(L + PIPE_W, T - CAP_H - hl, CAP_X, hl);
   }
 }
 function groundSand() {                            // drifts, 2 px columns, run-length merged
   let run = -1, runH = 0;
-  const off = Math.round(dist), fs = snowFrac();
+  const off = Math.round(dist), fs = snowFrac(), fi = iceFrac();
   const flush = (x1) => {
     if (run < 0 || runH <= 0) return;
-    const w = x1 - run, hs = Math.round(runH * fs), hd = runH - hs;
+    const w = x1 - run, hi = Math.min(runH, Math.round(runH * fi + (fi > 0.02 ? 0.5 : 0)));
+    if (hi > 0) iceCrust(run, SKY - runH, w, hi, ((run + off) % 37) < 2);
+    const rh = runH - hi, hs = Math.round(rh * fs / Math.max(1e-6, 1 - fi)), hd = rh - hs;
     if (hd > 0) {
       ctx.fillStyle = C.duneShade; ctx.fillRect(run, SKY - hd, w, hd);
       ctx.fillStyle = C.dune; ctx.fillRect(run, SKY - hd, w, Math.max(1, Math.ceil(hd * 0.45) + 1));
@@ -1708,8 +1747,8 @@ function groundSand() {                            // drifts, 2 px columns, run-
       }
     }
     if (hs > 0) {
-      ctx.fillStyle = C.snowShade; ctx.fillRect(run, SKY - runH, w, hs);
-      ctx.fillStyle = C.snow; ctx.fillRect(run, SKY - runH, w, Math.max(1, Math.ceil(hs * 0.6) + 1));
+      ctx.fillStyle = C.snowShade; ctx.fillRect(run, SKY - rh, w, hs);
+      ctx.fillStyle = C.snow; ctx.fillRect(run, SKY - rh, w, Math.max(1, Math.ceil(hs * 0.6) + 1));
     }
   };
   for (let x = 0; x < W; x += 2) {

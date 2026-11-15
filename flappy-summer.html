@@ -56,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">sun</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">summer r7</div>
+<div id="hud">summer r8</div>
 
 <script>
 "use strict";
@@ -146,23 +146,35 @@ setWindMul((() => {
    ============================================================ */
 const SUN = { period: 110, swing: 0.55 };   // s per swing back and forth, max shadow lean (a high desert sun)
 /* ============================================================
-   HEAT - skin heat rises in sunlight and drains away in shade. Skin heat
-   above `soakAt` soaks into the core, and the core never cools during a game.
-   Every wingbeat is work and adds a little heat. Heat weakens the flap and
-   makes the bird sluggish, so it must flap more often (more heat) until it
-   can no longer hold its height.
+   HEAT - skin heat rises in sunlight and drains away in shade and in moving
+   air: a strong breeze cools the bird even in the sun, dead calm barely does.
+   The core follows the skin slowly, both ways: a long hot run cooks the bird,
+   a cool spell brings it back, so a bird can come back from a bad stretch. Heat does little until it is past `knee`, then
+   weakens the flap and makes the bird sink harder. Smoke banks over the sun
+   (and the odd blazing spell) make every game's luck different.
    ============================================================ */
 const HEAT = {
-  rate: 0.080,        // skin heat per second in full sun at x1
-  cool: 0.50,         // fraction of skin heat shed per second in full shade
-  air: 0.06,          // ...and in the sun, by moving air
-  soakAt: 0.10,       // skin heat above this soaks into the core
-  soak: 0.10,         // per second, per unit of skin heat above soakAt
+  rate: 0.140,        // skin heat per second in full sun at x1
+  cool: 0.50,         // fraction of skin heat shed per second in full shade (typical wind)
+  air: 0.06,          // ...and in the sun, by moving air (typical wind)
+  gain: 2.5,          // the core heads for gain x skin heat: a long hot run cooks it...
+  up: 20,             // ...over about this many seconds
+  down: 8,            // ...and a cool spell (shade, a breeze, a cloud) brings it back down
   flap: 0.004,        // skin heat per wingbeat
+  knee: 0.40,         // heat below this barely matters
   lift: 0.45,         // cooked: flap is 45% weaker
   weight: 0.30,       // ...and the bird sinks 30% harder
-  curve: 2.0          // effect = heat^curve: a warm bird barely notices
+  curve: 2.5          // effect = ((heat - knee) / (1 - knee))^curve
 };
+/* wind cooling: x0.4 in still air (< 5 px/s), x1 in a typical 17 px/s wind, up to x2 at 25+, more in a gust */
+function windCool() {
+  const w = Math.abs(airU);
+  const f = w <= 5 ? 0.4 : w <= 17 ? 0.4 + 0.6 * (w - 5) / 12 : Math.min(2, 1 + (w - 17) / 8);
+  return f + 0.5 * gustE;
+}
+/* SKY - now and then a smoke bank slides over the sun (it drops to 25-50% for 4-12 s),
+   and once in a while the air clears into a blazing spell (130% for 3-6 s). */
+const SKYEV = { every: [15, 40], cloud: [0.25, 0.5], cloudDur: [4, 12], blazeP: 0.2, blaze: 1.3, blazeDur: [3, 6], tau: 1.2 };
 let sunMul = (() => {
   try {
     const v = parseFloat(new URLSearchParams(location.search).get("sun"));
@@ -254,6 +266,7 @@ let sandD = (() => {
 let clearT = 0, clearFrom = 0, clears = 0, saveT = 0;
 let trail = [];                                       // smoke pouring off a hot bird
 const dustW = { k: 1, target: 1, next: 0 }, smokeW = { k: 1, target: 1, next: 0 };
+const skyEv = { k: 1, target: 1, t: 0, next: 8 + Math.random() * 20, dir: 1 };   // the sun's strength right now
 let skin = 0, core = 0, shade = 0, flapEff = FLAP, gEff = GRAVITY, flaps = 0;
 let sweat = [], shadeK = 0;                          // sweat drops, eased shade
 /* A pipe's shadow can lie up to SUN.swing * SKY px to either side of it, so pipes
@@ -505,7 +518,15 @@ function stepSun(dt) {
   sunSX = SUN.swing * Math.sin(sunPh);
   wander(dustW, dt, 0.5, 1.7, 10, 3);                  // dust storms come and go
   wander(smokeW, dt, 0.5, 1.5, 14, 5);                 // so does the smoke from the fires
+  if (skyEv.t > 0) { skyEv.t -= dt; if (skyEv.t <= 0) { skyEv.target = 1; skyEv.next = randIn(SKYEV.every); } }
+  else if ((skyEv.next -= dt) <= 0) {
+    if (Math.random() < SKYEV.blazeP) { skyEv.target = SKYEV.blaze; skyEv.t = randIn(SKYEV.blazeDur); }
+    else { skyEv.target = randIn(SKYEV.cloud); skyEv.t = randIn(SKYEV.cloudDur); skyEv.dir = sgn(); }
+  }
+  skyEv.k += (skyEv.target - skyEv.k) * (1 - Math.exp(-dt / SKYEV.tau));
 }
+function cloudCover() { return Math.max(0, Math.min(1, (1 - skyEv.k) / 0.6)); }   // 0 clear .. 1 a thick bank
+function blazeK() { return Math.max(0, (skyEv.k - 1) / (SKYEV.blaze - 1)); }
 function sunXY() { return [W / 2 + sunSX * 112, 48 + 40 * Math.abs(sunSX)]; }   // lower when it leans
 /* SHADOWS. A rect [x0,x1] x [ya,yb] shades row y on x0-d*sx .. x1-d*sx for every
    height d it rises toward the sun before reaching the rect (d from y-yb to y-ya).
@@ -539,7 +560,7 @@ function inShade(x, y) {
   return 0;
 }
 function heatFx() {                                    // what the heat does to the bird
-  const e = Math.min(1, core + 0.6 * skin) ** HEAT.curve;
+  const e = Math.max(0, (heatE() - HEAT.knee) / (1 - HEAT.knee)) ** HEAT.curve;
   flapEff = FLAP * (1 - HEAT.lift * e);
   gEff = GRAVITY * (1 + HEAT.weight * e);
 }
@@ -549,10 +570,12 @@ function stepHeat(dt) {
   for (let i = 0; i < 3; i++) LIT[i] = sunMul > 0 && !inShade(birdX, bird.y + LIT_DY[i]);
   shade = 3 - LIT[0] - LIT[1] - LIT[2]; shade /= 3;
   shadeK += (shade - shadeK) * (1 - Math.exp(-dt / 0.12));
-  const sun = sunK() * (1.12 - 0.12 * smokeW.k);      // thick smoke takes the edge off
-  skin += (HEAT.rate * sun * (1 - shade) - (HEAT.cool * shade + HEAT.air) * skin) * dt;
+  const sun = sunK() * skyEv.k * (1.12 - 0.12 * smokeW.k);   // clouds and thick smoke take the edge off
+  const wc = windCool();
+  skin += (HEAT.rate * sun * (1 - shade) - (HEAT.cool * shade * (0.6 + 0.4 * wc) + HEAT.air * wc) * skin) * dt;
   skin = Math.max(0, Math.min(1, skin));
-  core = Math.min(1, core + HEAT.soak * Math.max(0, skin - HEAT.soakAt) * dt);
+  const goal = Math.min(1, HEAT.gain * skin);
+  core += (goal - core) * (1 - Math.exp(-dt / (goal > core ? HEAT.up : HEAT.down)));
   heatFx();
   if (shade < 1 && skin > 0.25 && Math.random() < 9 * (skin - 0.2) * dt)   // sweat flicked off the bird
     sweat.push({ x: birdX + (Math.random() * 2 - 1) * 8, y: bird.y - 4 + Math.random() * 6,
@@ -1094,7 +1117,25 @@ function drawSun() {                              // a pixel disc with two rings
   };
   disc(40, C.sunGlow, 0.12); disc(28, C.sunGlow, 0.22); disc(17, C.sun, 1);
   disc(17, "#7a4a30", 0.25 * (smokeW.k - 0.5));     // smoke across its face
+  const b = blazeK();
+  if (b > 0) { disc(54, C.sunGlow, 0.10 * b); disc(22, "#ffffff", 0.5 * b); }   // blazing: a wider, whiter glare
   ctx.globalAlpha = 1;
+  const c = cloudCover();
+  if (c > 0.01) {                                    // a smoke bank sliding across the sun
+    const x = Math.round(cx + skyEv.dir * (1 - c) * 70), y = Math.round(cy);
+    ctx.globalAlpha = 0.78 * Math.min(1, c * 1.6);   // the sun still shows through, dimly
+    ctx.fillStyle = "#5a3a2c";
+    ctx.fillRect(x - 46, y - 8, 92, 22); ctx.fillRect(x - 32, y - 20, 58, 14); ctx.fillRect(x - 12, y - 28, 30, 10);
+    ctx.fillRect(x - 58, y + 2, 20, 10); ctx.fillRect(x + 40, y - 2, 18, 12);
+    ctx.fillStyle = "#a0684a";                     // its sunlit rim
+    ctx.fillRect(x - 32, y - 20, 58, 2); ctx.fillRect(x - 12, y - 28, 30, 2); ctx.fillRect(x - 46, y - 8, 14, 2); ctx.fillRect(x + 26, y - 8, 20, 2);
+    ctx.globalAlpha = 1;
+  }
+}
+function skyLight() {                              // the whole scene dims under cloud, glares in a blaze
+  const c = cloudCover(), b = blazeK();
+  if (c > 0.01) { ctx.fillStyle = "rgba(40,18,10," + (0.22 * c).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY); }
+  if (b > 0.01) { ctx.fillStyle = "rgba(255,236,170," + (0.10 * b).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY); }
 }
 function drawSmoke() {                             // stacked blocks, each a little see-through
   for (const p of smoke) {
@@ -1136,9 +1177,10 @@ function drawCacti() {                             // saguaros: trunk, ribs, arm
     for (let y = top + 5; y < SKY - 3; y += 6) { ctx.fillRect(x - 6, y, 1, 1); ctx.fillRect(x + 5, y + 3, 1, 1); }
   }
 }
+function shadowCol() { return "rgba(60,22,6," + (0.30 * Math.min(1.25, skyEv.k)).toFixed(3) + ")"; }   // faint under cloud
 function drawShadows() {                           // the pipes' shade, painted row by row
   if (Math.abs(sunSX) > 2) return;
-  ctx.fillStyle = C.shadow;
+  ctx.fillStyle = shadowCol();
   for (let y = 0; y < SKY; y += 2) {
     SPANS.length = 0;
     for (const p of pipes) pipeShadows(y + 1, p, SPANS);
@@ -1151,7 +1193,7 @@ function drawShadows() {                           // the pipes' shade, painted 
 function groundShadows() {                         // ...and where it falls across the ground
   SPANS.length = 0;
   for (const p of pipes) pipeShadows(SKY, p, SPANS);
-  ctx.fillStyle = C.shadow;
+  ctx.fillStyle = shadowCol();
   for (let i = 0; i < SPANS.length; i += 2) {
     const lo = Math.max(0, Math.round(SPANS[i])), hi = Math.min(W, Math.round(SPANS[i + 1]));
     if (hi > lo) ctx.fillRect(lo, SKY, hi - lo, 15);
@@ -1364,8 +1406,12 @@ function drawHeatHud() {                           // 4. and spelled out in the 
   ctx.fillStyle = "#ffb03a"; ctx.fillRect(bx + Math.round(bw * core), by, Math.round(bw * Math.min(0.6 * skin, 1 - core)), 5);
   const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : "IN THE SUN";
   txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
+  const wc = windCool(), c = cloudCover(), b = blazeK();
+  const air = c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
+            : wc < 0.6 ? ["STILL AIR", "#ffc070"] : wc > 1.4 ? ["STRONG BREEZE", "#9fe0ff"] : ["BREEZE", "#cfe8f0"];
+  txt(air[0], W - 8, 96, air[1], F.hud, "right");
   const fx = Math.round(100 * (1 - flapEff / FLAP));
-  if (fx >= 1) txt("FLAP -" + fx + "%", W - 8, 96, fx > 20 ? "#ff8a5a" : "rgba(255,255,255,.8)", F.hud, "right");
+  if (fx >= 1) txt("FLAP -" + fx + "%", W - 8, 114, fx > 20 ? "#ff8a5a" : "rgba(255,255,255,.8)", F.hud, "right");
 }
 
 function drawBird() {
@@ -1446,6 +1492,7 @@ function draw() {
   drawSmoke();                                   // far away, behind everything solid
   skyline();
   haze();
+  skyLight();
   drawCacti();
   groundSand();                                  // over the foot of the cacti, under the shade
   drawShadows();

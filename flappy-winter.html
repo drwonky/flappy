@@ -57,7 +57,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">wind</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">autopilot, no input. <b>winter</b>: snow piles up on the pipes and the ground, and <b>ice</b> builds on the bird - it flaps harder to shake it off, until the ice wins. more wind, faster freeze</div>
+<div id="hud">autopilot, no input. <b>winter</b>: snow piles up on the pipes and the ground until a gap snows shut and it <b>thaws</b>, and <b>ice</b> builds on the bird - it flaps harder to shake it off, until the ice wins. more wind, faster freeze</div>
 
 <script>
 "use strict";
@@ -141,13 +141,16 @@ setWindMul((() => {
   } catch (e) { return 1; }
 })());
 /* ============================================================
-   SNOW - one depth for the whole world (px), still building between games,
-   so a pipe sliding in carries everything that fell while it was off screen.
-   ?snow=N sets the starting depth.
+   SNOW - one depth for the whole world (px). It keeps building between games
+   and is saved in the browser, so it carries over between visits too; a pipe
+   sliding in carries everything that fell while it was off screen. When a pile
+   closes a gap (less than `block` px left to fly through) the snow thaws back
+   to `start` and the cycle begins again. ?snow=N sets the depth.
    ============================================================ */
 const SNOW = {
-  start: 2, max: 18, rate: 0.11,          // ground depth: px, px, px/s at normal snowfall
-  pipeK: 0.7, pipeMax: 13, ledgeMax: 4,   // caps on the bottom lips, crests on the top lips
+  start: 2, max: 400, rate: 0.15,         // ground depth: px, px (safety cap), px/s at normal snowfall
+  pipeK: 1.0, ledgeMax: 4,                // mounds on the bottom lips, crests on the top lips
+  block: 24, thaw: 2.5,                   // a gap this narrow is closed; the thaw takes this long (s)
   density: 0.0026,                        // flakes per px^2 of sky at normal snowfall
   fallMin: 0.55, fallMax: 1.45            // snowfall intensity wanders in this range
 };
@@ -158,7 +161,7 @@ const SNOW = {
    until it can no longer hold its height.
    ============================================================ */
 const ICE = {
-  rate: 0.036,        // rime per second at x1 wind
+  rate: 0.026,        // rime per second at x1 wind
   shed: 0.012,        // rime knocked off per flap
   harden: 0.030,      // fraction of the rime that turns to glaze per second
   lift: 0.45,         // fully iced: flap is 45% weaker
@@ -227,13 +230,21 @@ let airU = 0, gustE = 0, aBird = 0, aFelt = 0, airClock = 0;
 let birdX = BIRD_X, gspd = SPEED0, dist = 0, cloudX = 0, curSince = 0, curNext = 300;
 const WA = { u: 0, a: 0 };                          // windAt() result, reused
 
-/* winter state: the snow carries over between games, the ice does not */
+/* winter state: the snow carries over between games (and visits), the ice does not */
+const SNOW_KEY = "flappy-winter-snow";
 let snowD = (() => {
+  const ok = v => isFinite(v) && v >= 0;
   try {
-    const v = parseFloat(new URLSearchParams(location.search).get("snow"));
-    return isFinite(v) && v >= 0 ? Math.min(v, SNOW.max) : SNOW.start;
-  } catch (e) { return SNOW.start; }
+    const q = parseFloat(new URLSearchParams(location.search).get("snow"));
+    if (ok(q)) return Math.min(q, SNOW.max);
+  } catch (e) {}
+  try {
+    const v = parseFloat(localStorage.getItem(SNOW_KEY));
+    if (ok(v)) return Math.min(v, SNOW.max);
+  } catch (e) {}
+  return SNOW.start;
 })();
+let thawT = 0, thawFrom = 0, thaws = 0, saveT = 0;
 let fallK = 1, fallTarget = 1, fallNext = 6;
 let rime = 0, glaze = 0, flapEff = 540, gEff = 1800, flaps = 0;
 
@@ -263,7 +274,7 @@ function reset() {
 function spawn() {
   const top = 30 + Math.random() * (SKY - 60 - gap);
   pipes.push({ x: W, top: top, bot: top + gap, passed: false,
-               sf: 0.8 + Math.random() * 0.4,          // this pipe's share of the snow
+               sf: 0.85 + Math.random() * 0.3,         // this pipe's share of the snow
                cut: new Float32Array(SNOW_COLS) });      // where the bird has plowed through its cap
   pipeRects(pipes[pipes.length - 1]);                   // flakes waiting at the edge inside the new pipe: gone
   for (const q of airParts)
@@ -472,28 +483,66 @@ function stepSnow(dt) {
   fallNext -= dt;
   if (fallNext <= 0) { fallNext = 8 + Math.random() * 8; fallTarget = randIn([SNOW.fallMin, SNOW.fallMax]); }
   fallK += (fallTarget - fallK) * (1 - Math.exp(-dt / 3));
-  snowD = Math.min(SNOW.max, snowD + SNOW.rate * fallK * dt);
+  if (thawT > 0) {                                     // thawing: the snow sinks back to a dusting
+    thawT = Math.max(0, thawT - dt);
+    const k = thawT / SNOW.thaw;
+    snowD = SNOW.start + (thawFrom - SNOW.start) * k * k * (3 - 2 * k);
+    if (Math.random() < 40 * dt) {                   // meltwater steam off the sinking piles
+      const x = Math.random() * W;
+      spawnDust(x, SKY - groundSnowH(x) - 1, -50 - Math.random() * 50);
+    }
+  } else {
+    snowD = Math.min(SNOW.max, snowD + SNOW.rate * fallK * dt);
+    if (!dead) checkBlocked();
+  }
+  saveT -= dt;
+  if (saveT <= 0) { saveT = 2; saveSnow(); }
 }
-function pipeSnowH(p) { return Math.min(SNOW.pipeMax, snowD * SNOW.pipeK * p.sf); }
-function capProfile(i) {                               // rounded ends on a lip cap
+function saveSnow() { try { localStorage.setItem(SNOW_KEY, snowD.toFixed(2)); } catch (e) {} }
+function pipeSnowH(p) { return snowD * SNOW.pipeK * p.sf; }
+/* the pile on a lip, column i of SNOW_COLS: flat on top while it is shallow, rounded
+   at the ends; once it is deep, its sides slump into a mound */
+function capProfile(i) {
   const d = Math.min(i, SNOW_COLS - 1 - i);
   return Math.min(1, (d + 1) / 4) ** 0.6;
+}
+function lipCol(h, i) {
+  const d = Math.min(i, SNOW_COLS - 1 - i);
+  return Math.min(h * capProfile(i), 3 + 5 * d + 0.35 * d * d);
+}
+/* how much room a pipe's gap still has: from the bottom of the top lip down to the
+   higher of the pile on the bottom lip and the ground snow */
+function gapLeft(p) {
+  const pile = p.bot - lipCol(pipeSnowH(p), SNOW_COLS >> 1);
+  const drift = SKY - groundSnowH(p.x + PIPE_W / 2);
+  return Math.min(pile, drift) - p.top;
+}
+function checkBlocked() {                              // a closed gap on screen: thaw
+  for (const p of pipes)
+    if (p.x < W - CAP_X && p.x + PIPE_W > 0 && gapLeft(p) < SNOW.block) {
+      thawT = SNOW.thaw; thawFrom = snowD; thaws++;
+      return;
+    }
 }
 /* ground snow: the world depth, rippled into drifts (world-fixed, so they scroll
    with the ground) and banked up against the foot of every bottom pipe */
 function noise1(x) { return 0.5 + 0.3 * Math.sin(x * 0.031) + 0.2 * Math.sin(x * 0.083 + 1.3); }
 function groundSnowH(x) {
-  let h = snowD * (0.7 + 0.5 * noise1(x + dist));
+  const base = snowD * (0.7 + 0.5 * noise1(x + dist));
+  let h = base;
   for (const p of pipes) {
-    const L = p.x, R = p.x + PIPE_W;
-    if (x > L - 22 && x < L) h += snowD * 0.8 * (1 - (L - x) / 22) ** 1.5;
-    else if (x >= R && x < R + 22) h += snowD * 0.8 * (1 - (x - R) / 22) ** 1.5;
+    const L = p.x, R = p.x + PIPE_W, top = SKY - p.bot;  // a drift can climb a pipe, not overtop it
+    const wd = 22 + 0.7 * snowD;                         // deeper snow, broader banks
+    let d = 0;
+    if (x > L - wd && x < L) d = snowD * 0.8 * (1 - (L - x) / wd) ** 1.5;
+    else if (x >= R && x < R + wd) d = snowD * 0.8 * (1 - (x - R) / wd) ** 1.5;
+    if (d > 0) h = Math.max(h, base + Math.min(d, Math.max(0, top - base)));
   }
   return h;
 }
 function iceMul() {                                    // the more wind, the faster the freeze
   if (windMul <= 0) return 0.45;
-  return windMul <= 2 ? 0.45 + 0.55 * windMul : 1.55 + 2.45 * storm;   // x1 = 1, hurricane = 4
+  return windMul <= 2 ? 0.6 + 0.4 * windMul : 1.4 + 1.1 * storm;     // x1 = 1, x2 = 1.4, hurricane = 2.5
 }
 function iceFx() {                                     // what the ice does to the bird: little at
   const e = Math.min(1, rime + glaze) ** ICE.curve;      // first, then it bites hard as it thickens
@@ -530,7 +579,7 @@ function plowSnow() {
     for (let i = 0; i < SNOW_COLS; i++) {
       const cx = x0 + i * 2 + 1;
       if (cx < birdX - HW || cx > birdX + HW) continue;
-      const hc = h * capProfile(i);
+      const hc = lipCol(h, i);
       if (hc - p.cut[i] > allow) {
         p.cut[i] = hc - allow;
         if (Math.random() < 0.5) spawnDust(cx, B - allow - 1, -30 - Math.random() * 50);
@@ -637,7 +686,7 @@ function pipeRects(p) {                              // [x0, y0, x1, y1), as px(
   const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), R0 = PIPE_RECTS;
   R0[0][0] = L;          R0[0][1] = -999;      R0[0][2] = L + PIPE_W;         R0[0][3] = T - CAP_H;  // top shaft
   R0[1][0] = L - CAP_X;  R0[1][1] = T - CAP_H; R0[1][2] = L + PIPE_W + CAP_X; R0[1][3] = T;          // top lip
-  R0[2][0] = L - CAP_X;  R0[2][1] = B - Math.round(pipeSnowH(p)); R0[2][2] = L + PIPE_W + CAP_X; R0[2][3] = B + CAP_H;  // bottom lip + its snow
+  R0[2][0] = L - CAP_X;  R0[2][1] = B - Math.round(Math.min(pipeSnowH(p), 6)); R0[2][2] = L + PIPE_W + CAP_X; R0[2][3] = B + CAP_H;  // bottom lip + its snow
   R0[3][0] = L;          R0[3][1] = B + CAP_H; R0[3][2] = L + PIPE_W;         R0[3][3] = 999;        // bottom shaft
   return R0;
 }
@@ -952,7 +1001,7 @@ function clouds() {
 }
 
 function skyline() {                              // snow-capped blocks, caps grow with the snow
-  const cap = 2 + Math.round(snowD * 0.2);
+  const cap = Math.min(14, 2 + Math.round(snowD * 0.2));
   for (let i = 0; i < 8; i++) {
     const x = Math.round((((i * 46) - dist * 0.06) % (W + 70) + W + 70) % (W + 70) - 35);
     ctx.fillStyle = C.hillDark; ctx.fillRect(x, SKY - 26, 34, 26);
@@ -971,11 +1020,12 @@ function pipeSnow(p) {
   const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), h = pipeSnowH(p);
   const x0 = L - CAP_X - 1;
   for (let i = 0; i < SNOW_COLS; i++) {
-    const hc = Math.round(h * capProfile(i) - p.cut[i]);
+    const hc = Math.round(lipCol(h, i) - p.cut[i]);
     if (hc <= 0) continue;
     ctx.fillStyle = C.snowEdge; ctx.fillRect(x0 + i * 2, B - 1, 2, 1);            // shadow where it meets the lip
     ctx.fillStyle = C.snowShade; ctx.fillRect(x0 + i * 2, B - hc, 2, hc - 1);
-    ctx.fillStyle = C.snow; ctx.fillRect(x0 + i * 2, B - hc, 2, Math.max(1, Math.ceil(hc * 0.55)));
+    const lit = i < SNOW_COLS * 0.6 ? Math.ceil(hc * 0.8) : Math.ceil(Math.min(hc * 0.55, 3 + hc * 0.15));
+    ctx.fillStyle = C.snow; ctx.fillRect(x0 + i * 2, B - hc, 2, Math.max(1, lit));   // lit from the left, like the pipes
   }
   const hl = Math.min(SNOW.ledgeMax, Math.round(h * 0.35));
   if (hl > 0) {
@@ -1247,6 +1297,8 @@ function draw() {
       "rgba(255,255,255,.9)", F.hud, "right");
   drawWindHud();
   if (!dead || offT <= 0) drawIceHud();
+  if (thawT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap snowed shut: everything melts
+    outlineText("THAW", W / 2, 120, "#9fe0ff", F.hud);
 
   const k = 1 - Math.exp(-score / TAU);
   ctx.fillStyle = "rgba(0,0,0,.35)";

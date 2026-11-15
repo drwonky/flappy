@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Flappy - autopilot, 8-bit, windy</title>
+<style>
+  /* ---------- embedded pixel font: 04b_19 (c) 1999 Yuji Oshimoto / www.04.jp.org ----------
+     Embedded as a base64 data URI, so the demo needs NOTHING installed on the
+     system: no sidecar file, no network request, no locally installed font.
+     04b_19 is 1050 units/em with an 825-unit ink box and 600-unit advances (16px
+     letters at 28px), so 14px is the smallest size that rasterises on whole
+     pixels and every multiple of it (14 / 28 / 42) keeps stems crisp. Canvas
+     text below therefore uses only 14px and 28px. Weight is left at 400: the
+     file carries a single Regular face, and asking for 700 would make the
+     browser synthesise a fake-bold, which smears a pixel font. */
+  @font-face{
+    font-family:"04b_19";
+    font-style:normal;
+    font-weight:400;
+    src:url(data:font/ttf;base64,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) format("truetype");
+  }
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b0d10}
+  /* the page is exactly the viewport: canvas + caption are sized in fit() to fit inside it */
+  /* position:fixed + inset:0 tracks the VISIBLE viewport on mobile (address bar
+     shown or hidden) without relying on vh/dvh support */
+  body{position:fixed;inset:0;box-sizing:border-box;padding:16px;
+    display:flex;flex-direction:column;align-items:center;gap:12px;
+    font:400 14px/1.5 "04b_19",ui-monospace,monospace;color:#7d8a94;letter-spacing:0}
+  #stage{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center}
+  canvas{flex:none;display:block;image-rendering:pixelated;image-rendering:crisp-edges;
+    box-shadow:0 14px 44px rgba(0,0,0,.6);border-radius:3px;touch-action:none}
+  /* 576px = 36 glyphs of the 16px advance; never wider than the viewport. */
+  #hud{flex:none;text-align:center;text-transform:uppercase;max-width:min(576px,100%)}
+  #hud b{color:#e6edf3}
+  /* WIND control: a native range input (mouse, touch, keyboard all for free), log scale */
+  #windctl{flex:none;display:flex;align-items:center;gap:10px;width:min(400px,100%);
+    text-transform:uppercase;color:#e6edf3;user-select:none;-webkit-user-select:none}
+  #windctl label{flex:none}
+  #windval{flex:none;min-width:15ch;text-align:right;white-space:nowrap}
+  #windval.storm{color:#ffb347} #windval.hurricane{color:#ff6b5b} #windval.off{color:#7d8a94}
+  #wind{flex:1 1 auto;min-width:0;margin:0;height:36px;background:transparent;cursor:pointer;
+    -webkit-appearance:none;appearance:none;touch-action:none;-webkit-tap-highlight-color:transparent}
+  #wind:focus{outline:none}
+  #wind:focus-visible{outline:2px solid #7fe8ff;outline-offset:2px}
+  #wind::-webkit-slider-runnable-track{height:8px;background:linear-gradient(90deg,#3b4650 0 50%,#6b5a2a 70%,#7a2a20);
+    box-shadow:inset 0 0 0 2px #000}
+  #wind::-moz-range-track{height:8px;background:linear-gradient(90deg,#3b4650 0 50%,#6b5a2a 70%,#7a2a20);
+    box-shadow:inset 0 0 0 2px #000}
+  #wind::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:28px;margin-top:-10px;
+    background:#ffd23f;border:0;border-radius:0;box-shadow:inset 0 0 0 2px #000,inset -4px -4px 0 #c99a10}
+  #wind::-moz-range-thumb{width:18px;height:28px;background:#ffd23f;border:0;border-radius:0;
+    box-shadow:inset 0 0 0 2px #000,inset -4px -4px 0 #c99a10}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="game"></canvas></div>
+<div id="windctl"><label for="wind">wind</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
+  aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
+<div id="hud">autopilot, no input. <b>air currents</b>: headwinds, <b>updrafts</b> and <b>downdrafts</b> nudge the bird; leaves, dust and swirls show the wind</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   GEOMETRY - 288x512 logical, base 288x112 -> sky 400. SKY is
+   nudged to 399 so the horizon lands on a scan row.
+   ============================================================ */
+const W = 288, H = 512, GROUND = 113;
+const SKY = H - GROUND;
+
+/* PHYSICS - per-frame values widely quoted for the original (gravity
+   0.5 px/frame^2, flap -9 px/frame) converted to px/s. Unchanged from
+   the previous build; NOT re-simulated in this edit (sandbox down). */
+const GRAVITY = 1800;
+const FLAP = 540;
+const MAXVY = 560;
+const FIXED = 1/120;
+const COOLD = 0.34;         // > FLAP/GRAVITY = 0.30s, so the bird cannot hover
+
+const BIRD_X = 80;
+const BW = 17, BH = 12;     // hand-authored sprite
+const BS = 2;               // sprite is drawn 2x: 34x24 on screen
+const SPR_W = BW * BS, SPR_H = BH * BS;
+const HW = 10, HH = 8;      // hitbox 20x16, forgiving inside the sprite as the original's is
+
+/* PIPE - shaft 52 (pipe.png is 52x320). Lip overhang and lip height are
+   now ratios of the shaft, measured off the reference: lip = 1.24x shaft,
+   lip height = 0.40x shaft. */
+const PIPE_W = 52;
+const CAP_X = 6;                    // lip overhang per side
+const CAP_W = PIPE_W + 2 * CAP_X;   // 64
+const CAP_H = 20;
+const GAP0 = 140, GAP1 = 104;       // floor raised from 96: the bird is 16 tall now
+
+const SPEED0 = 130, SPEED1 = 200;
+const SPACE0 = 1.30, SPACE1 = 0.95;
+const TAU = 85;
+
+const K = 0.30;
+const MARGIN_FRAC = 0.06;
+const WOBBLE_FRAC = 0.12;
+
+/* ============================================================
+   AIR CURRENTS - every effect is capped so it NUDGES the bird, never
+   decides a gate.
+     u = horizontal air speed, px/s   (+ tailwind, - headwind)
+     a = vertical accel on the bird, px/s^2   (- lift, + sink)
+   Three layers: a slowly wandering prevailing wind, short gusts, and
+   updraft / downdraft columns that belong to the world and scroll with it.
+   ?wind=0 turns it all off (same RNG stream as the calm game), 1 is the
+   default nudge, 2 is a stiff breeze. Above 2 it builds into a STORM: by
+   ?wind=20 (and anything higher, ?wind=5000 included) it is a hurricane -
+   the bird is shoved back and forth, buffeted, and slammed by up/downdrafts.
+   ============================================================ */
+const WIND = {
+  baseMax: 28, baseEvery: [3, 7], baseTau: 1.5,     // prevailing wind
+  gustRate: 0.15, gustAmp: 20, gustDur: [0.6, 1.8], // gusts
+  curGap: [160, 380], curW: [70, 130],              // vertical currents
+  upS: [110, 160], downS: [90, 130], upFrac: 0.55,
+  aCap: 0.13 * GRAVITY,                             // lift / sink cap: 13% of gravity
+  spdCap: 0.12, spdPerU: 0.12 / 45,                 // ground speed: at most +-12%
+  drift: 5,                                         // bird x shift at full wind, px
+  turb: 60                                          // turbulence wobble, px/s^2
+};
+/* The wind setting comes from ?wind= and the WIND slider; both can change it live.
+   storm: 0 up to x2 (unchanged gentle wind), climbing on a log scale to 1
+   (hurricane) at x20; everything above that is a full hurricane. */
+let windMul = 1, storm = 0, airMul = 1, visMul = 1, physMul = 1;
+function setWindMul(v) {
+  windMul = v;
+  storm = windMul <= 2 ? 0 : Math.min(1, Math.log(windMul / 2) / Math.log(10));
+  airMul = windMul <= 2 ? windMul : 2 + 6 * storm;    // air speed / current strength, max x8
+  visMul = Math.min(5, airMul);                       // particle spawn rates
+  physMul = windMul <= 2 ? windMul : 2 + 2 * storm;   // the bird's caps, max x4
+}
+setWindMul((() => {
+  try {
+    const v = parseFloat(new URLSearchParams(location.search).get("wind"));
+    return isFinite(v) && v >= 0 ? v : 1;
+  } catch (e) { return 1; }
+})());
+const STORM = { aCap: 0.36 * GRAVITY, buffet: 0.35 * GRAVITY, drift: 40, spd: 0.6, vAirMax: 260 };
+const AIR_MAX = 320;                                // particle pool
+const LEAF_COLS = [["#7fbf4d","#3d6e1f"], ["#a9b94a","#5d6620"], ["#e89a3a","#8a4d14"],
+                   ["#b07a44","#5a3a1c"], ["#d8603a","#7a2a14"]];
+const DUST_COLS = ["#ded895", "#f3efc8", "#c3bb6d"];
+/* leaf poses, 3x2 cells of 2x2 px: B body, D stem/edge. Cycling them tumbles the leaf. */
+const LEAF_POSES = [["BB.", ".BD"], ["BBD", "..."], [".BB", "DB."], ["DBB", "..."]];
+
+const C = {
+  skyA:"#6cc5de", skyB:"#9adcec", skyC:"#c6ecf2", skyD:"#e4f6f7",
+  cloud:"#eef7fa", hill:"#7fbf4d", hillDark:"#5f9a38",
+  grass:"#74bf2e", grassDark:"#4e8f21",
+  sand:"#ded895", sandDark:"#c3bb6d",
+  pipeO:"#14200f", pipeLt:"#8ed04a", pipeHi:"#74bf2e", pipeMid:"#5aa81f", pipeLo:"#3d7a12",
+  ink:"#1a2419",
+  birdY:"#f8e018", birdD:"#d9a90f", birdC:"#f5f2c0",
+  eye:"#ffffff", pupil:"#20242a", beak:"#e8483a", beakLo:"#b62f26"
+};
+
+/* ============================================================
+   PIPE BANDS - the structure that reads as a Mario warp pipe.
+   Both lists are x-offsets from the LEFT EDGE OF THE LIP, so the
+   highlight column lands at the same absolute x in lip and shaft.
+   The shaft's extra structure is absent: no dashes, no rivets.
+   ============================================================ */
+const SHAFT_BANDS = [   // drawn at x, width PIPE_W
+  [CAP_X,      1, C.pipeO],    // outline
+  [CAP_X + 1,  6, C.pipeLt],   // left catch-light
+  [CAP_X + 7, 11, C.pipeHi],   // highlight
+  [CAP_X + 18, 18, C.pipeMid], // body
+  [CAP_X + 36, 15, C.pipeLo],  // shadow
+  [CAP_X + 51,  1, C.pipeO]    // outline
+];
+const LIP_BANDS = [     // drawn at x - CAP_X, width CAP_W
+  [0,  1, C.pipeO],
+  [1,  12, C.pipeLt],   // left bands match the shaft exactly
+  [13, 11, C.pipeHi],
+  [24, 18, C.pipeMid],
+  [42, 20, C.pipeLo],   // the overhang lands in the shadow - that IS the turn
+  [62,  1, C.pipeO],
+  [63,  1, C.pipeO]
+];
+
+let bird, pipes, score = 0, best = 0, cooldown = 0, since = 1e9, aimOff = 0;
+let dead = false, deadT = 0, flash = 0, clock = 0;
+let frameIdx = 0, frameT = 0, wingHold = 0;
+let speed = SPEED0, gap = GAP0, spaceSec = SPACE0;
+
+/* ---------- death sequence ----------
+   0 .. D_FREEZE        : world and bird frozen, feathers burst out
+   D_FREEZE .. D_ZAP    : electrocution - palette flicker, jitter, bolts, flashes
+   D_ZAP ..             : bird flips upside down, small hop, falls off screen */
+const D_FREEZE = 0.22, D_ZAP = 1.15, D_HOP = 240, D_REST = 0.8;
+let feathers = [], bolts = [], zapT = 0, zapOn = false, jit = [0, 0];
+let falling = false, offT = 0, deathRot = 0;
+
+/* air state */
+let wind = { u: 0, target: 0, next: 0 }, gusts = [], currents = [], airParts = [];
+let airU = 0, gustE = 0, aBird = 0, aFelt = 0, airClock = 0;
+let birdX = BIRD_X, gspd = SPEED0, dist = 0, cloudX = 0, curSince = 0, curNext = 300;
+const WA = { u: 0, a: 0 };                          // windAt() result, reused
+
+
+function ramp(sc) {
+  const k = 1 - Math.exp(-sc / TAU);
+  speed = SPEED0 + (SPEED1 - SPEED0) * k;
+  gap = GAP0 + (GAP1 - GAP0) * k;
+  spaceSec = SPACE0 + (SPACE1 - SPACE0) * k;
+}
+const usable = () => gap - 2 * HH;
+
+function reset() {
+  bird = { y: H * 0.42, vy: 0 };
+  pipes = [];
+  score = 0; cooldown = 0; since = 1e9; aimOff = 0;
+  dead = false; deadT = 0; flash = 0;
+  frameIdx = 0; frameT = 0; wingHold = 0;
+  feathers = []; bolts = []; zapT = 0; zapOn = false; jit = [0, 0];
+  falling = false; offT = 0; deathRot = 0;
+  wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
+  airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
+  ramp(0); gspd = speed;
+}
+
+function spawn() {
+  const top = 30 + Math.random() * (SKY - 60 - gap);
+  pipes.push({ x: W, top: top, bot: top + gap, passed: false });
+  aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
+}
+
+function wantFlap(n) {
+  // aim a touch higher in sinking air, a touch lower in rising air
+  const target = (n.top + n.bot) / 2 + aimOff - aFelt * 0.02;
+  if ((bird.y - target) + K * bird.vy <= 0) return false;
+  // the flap's apex under the gravity the bird actually feels right now
+  const apex = bird.y - (FLAP * FLAP) / (2 * Math.max(GRAVITY * 0.3, GRAVITY + aFelt));
+  return apex >= n.top + HH + usable() * MARGIN_FRAC;
+}
+
+function step(dt) {
+  flash = Math.max(0, flash - dt * 3);
+  airClock += dt;
+  if (windMul > 0) stepWind(dt);   // the wind keeps blowing through the crash
+  if (dead) {
+    gspd = 0;                      // ...but the world no longer scrolls
+    cloudX += -airU * 0.3 * dt;
+    stepAir(dt); stepFeathers(dt); stepDeath(dt); return;
+  }
+  stepFeathers(dt);
+  clock += dt;
+  ramp(score);
+
+  // headwind slows the ground speed, tailwind speeds it up (capped)
+  const sc = storm > 0 ? WIND.spdCap * 2 + (STORM.spd - WIND.spdCap * 2) * storm
+                       : WIND.spdCap * Math.max(1, physMul);
+  gspd = speed * (1 + Math.max(-sc, Math.min(sc, airU * WIND.spdPerU)));
+  dist += gspd * dt;
+  cloudX += (14 - airU * 0.3) * dt;
+
+  // pipes are spaced by DISTANCE, so wind never squeezes two gates together
+  since += gspd * dt;
+  if (since >= speed * spaceSec) { since = 0; spawn(); }
+
+  if (windMul > 0) {
+    curSince += gspd * dt;
+    if (curSince >= curNext) { curSince = 0; curNext = randIn(WIND.curGap); spawnCurrent(); }
+  }
+  for (const c of currents) c.x += (airU * 0.15 - gspd) * dt;
+  currents = currents.filter(c => c.x + c.w / 2 > -10);
+
+  // what the bird feels: capped lift/sink plus a zero-mean wobble in gusts and at column edges
+  windAt(birdX, bird.y);
+  const cap = storm > 0 ? WIND.aCap * 2 + (STORM.aCap - WIND.aCap * 2) * storm   // storm: up to 36% of gravity
+                        : WIND.aCap * Math.max(1, physMul);
+  aBird = Math.max(-cap, Math.min(cap, WA.a));
+  let edge = 0;
+  for (const c of currents) { const f = currentF(c, birdX); edge = Math.max(edge, 4 * f * (1 - f)); }
+  const tm = Math.min(1, gustE + edge) * WIND.turb * physMul;
+  let turb = tm * 0.5 * (Math.sin(airClock * 7.3) + Math.sin(airClock * 11.9 + 1.7));
+  if (storm > 0) {                 // storm buffeting: slow, heavy, irregular shoves up and down
+    const n = (Math.sin(airClock * 2.3) + Math.sin(airClock * 3.9 + 1.1) + Math.sin(airClock * 1.4 + 2.6)) / 3;
+    turb += storm * STORM.buffet * (0.5 + 0.8 * gustE) * n;
+  }
+  // a headwind pushes the bird back, a tailwind forward: a few px, a lot in a storm
+  const dr = WIND.drift + (STORM.drift - WIND.drift) * storm;
+  const sway = storm * 8 * Math.sin(airClock * 1.7) * (0.4 + gustE);
+  const tx = BIRD_X + Math.max(-1, Math.min(1, airU / (45 + 100 * storm))) * dr + sway;
+  birdX += (tx - birdX) * (1 - Math.exp(-dt / (0.6 - 0.35 * storm)));
+  aFelt = storm > 0 ? aBird + turb : aBird;   // in a storm the autopilot feels the shove it is in
+
+  cooldown -= dt;
+  let n = null;
+  for (const p of pipes) { if (p.x + PIPE_W > birdX - HW) { n = p; break; } }
+  if (n && cooldown <= 0 && wantFlap(n)) {
+    bird.vy = -FLAP;
+    cooldown = COOLD;
+    wingHold = 0.16;
+    frameIdx = 0; frameT = 0;
+  }
+
+  frameT += dt;
+  const rate = cooldown > 0 ? 0.13 : 0.09;
+  if (frameT > rate) {
+    frameT = 0;
+    if (wingHold > 0) wingHold -= rate; else frameIdx = (frameIdx + 1) % 4;
+  }
+
+  bird.vy = Math.min(bird.vy + (GRAVITY + aBird + turb) * dt, MAXVY);
+  bird.y += bird.vy * dt;
+
+  for (const p of pipes) {
+    p.x -= gspd * dt;
+    if (!p.passed && p.x + PIPE_W < birdX - HW) { p.passed = true; score++; if (score > best) best = score; }
+  }
+  pipes = pipes.filter(p => p.x + PIPE_W > -80);
+  stepAir(dt);                     // after the pipes move, so nothing is left overlapping one
+
+  if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(); return; }
+  for (const p of pipes) {
+    if (birdX + HW > p.x && birdX - HW < p.x + PIPE_W &&
+        (bird.y - HH < p.top || bird.y + HH > p.bot)) { die(); return; }
+  }
+}
+
+function birdRot() { return bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620); }
+
+function die() {
+  dead = true; deadT = 0; flash = 1;
+  deathRot = birdRot();
+  bird.vy = 0;
+  spawnFeathers(birdX, bird.y);
+}
+
+const FEATHER_COLS = [C.birdY, C.birdY, C.birdD, C.birdC, "#ffffff"];
+function spawnFeathers(x, y) {
+  for (let i = 0; i < 34; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const v = 70 + Math.random() * 230;
+    feathers.push({
+      x: x + (Math.random() * 2 - 1) * 8,
+      y: y + (Math.random() * 2 - 1) * 6,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v - 90,           // bias upward so they puff out, then drift down
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() * 2 - 1) * 9,
+      ph: Math.random() * Math.PI * 2,
+      fr: 4 + Math.random() * 4,
+      len: Math.random() < 0.35 ? 6 : 4,
+      col: FEATHER_COLS[(Math.random() * FEATHER_COLS.length) | 0]
+    });
+  }
+}
+
+function stepFeathers(dt) {
+  if (!feathers.length) return;
+  const drag = Math.exp(-3.2 * dt);
+  for (const f of feathers) {
+    f.vx *= drag;
+    f.vy = Math.min(f.vy * drag + 420 * dt, 55);   // light: low terminal velocity
+    f.ph += f.fr * dt;
+    windAt(f.x, f.y);                               // carried by the wind
+    f.x += (f.vx + Math.sin(f.ph) * 28 + (WA.u - gspd) * 0.9) * dt;   // + side-to-side flutter
+    f.y += (f.vy + WA.a * 0.15) * dt;
+    f.rot += (f.vr + Math.cos(f.ph) * 3) * dt;
+  }
+  feathers = feathers.filter(f => f.y < H + 10 && f.x > -20 && f.x < W + 20);
+}
+
+function makeBolts() {
+  const out = [];
+  const n = 3 + ((Math.random() * 3) | 0);
+  for (let b = 0; b < n; b++) {
+    let a = Math.random() * Math.PI * 2;
+    let x = birdX + Math.cos(a) * 8, y = bird.y + Math.sin(a) * 6;
+    const pts = [[Math.round(x), Math.round(y)]];
+    const segs = 3 + ((Math.random() * 3) | 0);
+    for (let i = 0; i < segs; i++) {
+      a += (Math.random() * 2 - 1) * 0.9;
+      const l = 6 + Math.random() * 8;
+      x += Math.cos(a) * l; y += Math.sin(a) * l;
+      pts.push([Math.round(x), Math.round(y)]);
+    }
+    out.push(pts);
+  }
+  return out;
+}
+
+function stepDeath(dt) {
+  deadT += dt;
+  if (deadT < D_FREEZE) return;                 // frozen in place
+  if (deadT < D_ZAP) {                          // electrocution
+    zapT -= dt;
+    if (zapT <= 0) {
+      zapT = 0.045 + Math.random() * 0.03;
+      zapOn = !zapOn;
+      bolts = makeBolts();
+      jit = [Math.round((Math.random() * 2 - 1) * 2), Math.round((Math.random() * 2 - 1) * 2)];
+      if (Math.random() < 0.35) flash = Math.max(flash, 0.45);
+    }
+    return;
+  }
+  if (!falling) {                               // flip and drop
+    falling = true; bolts = []; zapOn = false; jit = [0, 0];
+    bird.vy = -D_HOP;
+  }
+  bird.vy = Math.min(bird.vy + GRAVITY * dt, 900);
+  bird.y += bird.vy * dt;
+  if (bird.y - SPR_H > H) { offT += dt; if (offT > D_REST) reset(); }
+}
+
+/* ============================================================
+   AIR - wind model and the particles that show it
+   ============================================================ */
+function randIn(r) { return r[0] + Math.random() * (r[1] - r[0]); }
+function sgn() { return Math.random() < 0.5 ? -1 : 1; }
+
+function stepWind(dt) {
+  wind.next -= dt;
+  if (wind.next <= 0) {                         // new prevailing target: a decisive wind (rarely calm)
+    wind.next = randIn(WIND.baseEvery);         // that swings round often: ~4 reversals a minute
+    const keep = wind.target !== 0 && Math.random() < 0.3;
+    wind.target = (keep ? Math.sign(wind.target) : sgn()) * WIND.baseMax * (0.35 + 0.65 * Math.random());
+  }
+  wind.u += (wind.target - wind.u) * (1 - Math.exp(-dt / WIND.baseTau));
+  if (Math.random() < WIND.gustRate * dt) {
+    const along = Math.random() < 0.6 ? 1 : -1;   // gusts lean toward the prevailing wind
+    const g = { t: 0, dur: randIn(WIND.gustDur), amp: along * (Math.sign(wind.u) || 1) * WIND.gustAmp * (0.6 + 0.4 * Math.random()) };
+    gusts.push(g);
+    gustFront(g);
+  }
+  let gu = 0; gustE = 0;
+  for (const g of gusts) {
+    g.t += dt;
+    const e = Math.sin(Math.PI * Math.min(1, g.t / g.dur)) ** 2;   // smooth rise and fall
+    gu += g.amp * e; gustE = Math.max(gustE, e);
+  }
+  gusts = gusts.filter(g => g.t < g.dur);
+  airU = (wind.u + gu) * airMul;
+}
+
+function spawnCurrent() {
+  const up = Math.random() < WIND.upFrac, w = randIn(WIND.curW);
+  currents.push({ x: W + w / 2 + 10, w: w, s: up ? -randIn(WIND.upS) : randIn(WIND.downS), ph: Math.random() * 97 });
+}
+function currentF(c, x) {                       // cosine column profile, 1 at the centre
+  const d = Math.abs(x - c.x) / (c.w / 2);
+  return d >= 1 ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * d);
+}
+function windAt(x, y) {
+  let a = 0;
+  for (const c of currents) a += c.s * currentF(c, x);
+  WA.u = airU; WA.a = a * airMul;
+  return WA;
+}
+
+/* ---- what the EYE needs: the camera rides along with the bird at 130-200 px/s, so
+   a true 28 px/s wind only makes leaves drift left a little faster or slower and a
+   change of direction is invisible. Particles (never the bird) are moved by an
+   exaggerated air speed relative to the scenery, softly capped: in a tailwind they
+   hang or blow right against the scrolling ground, in a headwind they race past. ---- */
+const VIS_K = 10, VIS_MAX = 480;
+function visU(u) { return VIS_MAX * Math.tanh(u * VIS_K / VIS_MAX); }
+
+/* ---- pipes are solid to the air. Relative to a pipe the air moves at airU, so on the
+   windward face it stalls and slides along the pipe toward the gap, squeezes through
+   the gap faster, and goes slack in the lee. Visual only: the bird's physics never
+   see this, so balance is unchanged. ---- */
+const PIPE_REACH = 24, PIPE_LEE = 36;
+const PF = { u: 1, v: 0, calm: 1 };                  // pipeFlow() result, reused
+function pipeFlow(x, y) {
+  PF.u = 1; PF.v = 0; PF.calm = 1;
+  const r = visU(airU), rs = Math.min(1, Math.abs(r) / 100);
+  for (const p of pipes) {
+    const x0 = p.x - CAP_X, x1 = p.x + PIPE_W + CAP_X;
+    if (x < x0 - PIPE_LEE || x > x1 + PIPE_LEE) continue;
+    const m = (p.top + p.bot) / 2;
+    if (x >= x0 && x <= x1) {                        // inside the slot between the lips
+      if (y > p.top && y < p.bot) { PF.u *= 1 + 0.8 * rs; PF.v += (m - y) * 0.7 * rs; PF.calm *= 0.4; }
+      continue;
+    }
+    const up = r < 0 ? x - x1 : x0 - x;             // > 0: windward side of this pipe
+    const solid = y < p.top + 4 || y > p.bot - 4;    // level with the pipe, not the gap
+    if (up > 0 && up < PIPE_REACH) {
+      const g = 1 - up / PIPE_REACH, gg = g * g * (3 - 2 * g);
+      if (solid) {                                   // stall, then slide toward the gap
+        PF.u *= 1 - gg;
+        PF.v += (y < m ? 1 : -1) * (14 + 0.35 * Math.min(250, Math.abs(r))) * gg;
+        PF.calm *= 1 - 0.85 * gg;
+      } else {                                       // funnel into the gap
+        PF.u *= 1 + 0.4 * gg * rs;
+        PF.v += (m - y) * 0.5 * gg * rs;
+      }
+    } else if (up < 0 && -up < PIPE_LEE && solid) { // sheltered lee
+      const f = 0.3 + 0.7 * (-up / PIPE_LEE);
+      PF.u *= f; PF.calm *= f;
+    }
+  }
+  return PF;
+}
+/* Pipes are solid, tested in DRAWN pixels: px() snaps the pipes to whole pixels and
+   particles are snapped when painted, so the test uses the same rounding and is exact.
+   A particle at (x, y) paints the columns round(x)-l .. round(x)+r-1 and the rows
+   round(y)-t .. round(y)+b-1. */
+const PIPE_RECTS = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+function pipeRects(p) {                              // [x0, y0, x1, y1), as px() paints them
+  const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), R0 = PIPE_RECTS;
+  R0[0][0] = L;          R0[0][1] = -999;      R0[0][2] = L + PIPE_W;         R0[0][3] = T - CAP_H;  // top shaft
+  R0[1][0] = L - CAP_X;  R0[1][1] = T - CAP_H; R0[1][2] = L + PIPE_W + CAP_X; R0[1][3] = T;          // top lip
+  R0[2][0] = L - CAP_X;  R0[2][1] = B;         R0[2][2] = L + PIPE_W + CAP_X; R0[2][3] = B + CAP_H;  // bottom lip
+  R0[3][0] = L;          R0[3][1] = B + CAP_H; R0[3][2] = L + PIPE_W;         R0[3][3] = 999;        // bottom shaft
+  return R0;
+}
+function hitsRects(X, Y, l, r, t, b) {
+  for (const q of PIPE_RECTS) if (X - l < q[2] && X + r > q[0] && Y - t < q[3] && Y + b > q[1]) return true;
+  return false;
+}
+function inPipe(x, y, w, h) {                        // does this painted w x h block touch a pipe?
+  w = w || 1; h = h || 1;
+  for (const p of pipes) {
+    if (x + w < p.x - CAP_X - 1 || x > p.x + PIPE_W + CAP_X + 1) continue;
+    pipeRects(p);
+    if (hitsRects(x, y, 0, w, 0, h)) return true;
+  }
+  return false;
+}
+/* shove the particle to the nearest free spot and cancel the part of its velocity
+   that pointed into the pipe */
+function keepOut(q, l, r, t, b) {
+  for (const p of pipes) {
+    if (q.x < p.x - CAP_X - r - 1 || q.x > p.x + PIPE_W + CAP_X + l + 1) continue;
+    const R0 = pipeRects(p);
+    let X = Math.round(q.x), Y = Math.round(q.y);
+    if (!hitsRects(X, Y, l, r, t, b)) continue;
+    const hidden = q.k === 0 && !leafVisible(q.x, q.y);   // an off-screen leaf must not be shoved into view
+    let bx = X, by = Y, bd = 1e9;
+    for (const k of R0) {
+      if (!(X - l < k[2] && X + r > k[0] && Y - t < k[3] && Y + b > k[1])) continue;
+      const c = [[k[0] - r, Y], [k[2] + l, Y], [X, k[1] - b], [X, k[3] + t]];
+      for (const [cx, cy] of c) {
+        const d = Math.abs(cx - q.x) + Math.abs(cy - q.y);
+        if (d < bd && !hitsRects(cx, cy, l, r, t, b) && !(hidden && leafVisible(cx, cy))) { bd = d; bx = cx; by = cy; }
+      }
+    }
+    if (bd === 1e9) { if (hidden) q.age = q.life; continue; }   // nowhere unseen to go: it never arrives
+    if (q.vx !== undefined) {
+      const rel = q.vx + gspd;                       // velocity relative to the pipe
+      if ((bx < q.x && rel > 0) || (bx > q.x && rel < 0)) q.vx = -gspd;
+      if ((by < q.y && q.vy > 0) || (by > q.y && q.vy < 0)) q.vy = 0;
+    }
+    if (bx !== X) q.x = bx;                          // whole pixels on the pushed axis
+    if (by !== Y) q.y = by;
+  }
+}
+function streakHitsPipe(q) {                         // head row and the tail row under it
+  const X = Math.round(q.x), Y = Math.round(q.y), n = Math.round(q.len);
+  for (let i = 0; i <= n; i++) if (inPipe(X + i, Y) || inPipe(X + i, Y + 1)) return true;   // <= : a rounded tail can run 1px past the head
+  return false;
+}
+
+/* ---- particles: leaves, dust, speed streaks, swirls ---- */
+function addPart(p) { if (airParts.length < AIR_MAX) airParts.push(p); }
+/* Leaves only ever ENTER the screen - from the left, the right or the top - so a
+   leaf is never created anywhere it could be seen (it is 6x4, centred on x, y). */
+const LEAF_OFF = 4;
+function leafOnScreen(x, y) { return x > -LEAF_OFF && x < W + LEAF_OFF && y > -LEAF_OFF; }
+function upwindX(off) { return visU(airU) - gspd < 0 ? W + off : -off; }   // the edge the air blows in from
+function leafVisible(x, y) {                     // painted pixels more than a sliver (4px) into view?
+  const X = Math.round(x), Y = Math.round(y);
+  return X - 3 < W - LEAF_OFF && X + 3 > LEAF_OFF && Y + 2 > LEAF_OFF;
+}
+function spawnLeaf(x, y, vy) {
+  if (leafOnScreen(x, y)) return;
+  for (const p of pipes) {                       // nor inside a pipe that is sliding in
+    if (x < p.x - CAP_X - 4 || x > p.x + PIPE_W + CAP_X + 4) continue;
+    pipeRects(p);
+    if (hitsRects(Math.round(x), Math.round(y), 3, 3, 2, 2)) return;
+  }
+  addPart({ k: 0, x: x, y: y, vx: visU(airU) - gspd, vy: vy, age: 0, life: 14,
+            pose: (Math.random() * 4) | 0, poseT: 0, ph: Math.random() * 6.3,
+            lph: Math.random() * 6.3, lw: sgn() * (3 + Math.random() * 3),   // own looping path
+            col: LEAF_COLS[(Math.random() * LEAF_COLS.length) | 0], near: Math.random() < 0.2 });
+}
+function spawnSwirl(x, y, dir) {
+  addPart({ k: 3, x: x, y: y, age: 0, life: 0.8 + Math.random() * 0.5, r: 4 + Math.random() * 4,
+            dir: dir, ph: Math.random() * 6.3 });
+}
+function spawnDust(x, y, vy) {
+  addPart({ k: 1, x: x, y: y, vx: visU(airU) - gspd, vy: vy, age: 0, life: 0.9 + Math.random() * 1.4,
+            col: DUST_COLS[(Math.random() * DUST_COLS.length) | 0], big: Math.random() < 0.35 });
+}
+/* a whirlwind: an invisible-ish vortex that drags nearby leaves and dust round in circles */
+function spawnWhirl(_x, y, withDebris) {           // always blows in from the upwind edge
+  const r = 14 + Math.random() * 10;
+  const x = upwindX(LEAF_OFF + 2 + r * 1.3);        // its debris starts off-screen too
+  const w = { k: 3, whirl: true, x: x, y: y, age: 0, life: 2.6 + Math.random() * 1.6,
+              r: r, dir: sgn(), ph: Math.random() * 6.3,
+              str: 70 + Math.random() * 40 };
+  addPart(w);
+  if (!withDebris) return;
+  const nl = 5 + ((Math.random() * 5) | 0), nd = 10 + ((Math.random() * 8) | 0);
+  for (let i = 0; i < nl + nd; i++) {
+    const a = Math.random() * 6.3, d = w.r * (0.3 + Math.random() * 0.9);
+    if (i < nl) spawnLeaf(x + Math.cos(a) * d, y + Math.sin(a) * d, 0);
+    else spawnDust(x + Math.cos(a) * d, y + Math.sin(a) * d, 0);
+  }
+}
+function gustFront(g) {                         // a gust arrives: a flurry of leaves blown in, a whirlwind
+  const n = 4 + ((Math.random() * 4) | 0);
+  for (let i = 0; i < n; i++)                   // in from the upwind edge, mostly low (off the bushes)
+    spawnLeaf(upwindX(LEAF_OFF + 2 + Math.random() * 30), SKY - 12 - Math.random() * 90, -40 - Math.random() * 50);
+  spawnWhirl(null, 70 + Math.random() * (SKY - 150), true);
+  for (let i = 0; i < 2; i++) spawnSwirl(Math.random() * W, 60 + Math.random() * (SKY - 120), sgn());
+}
+function spawnAir(dt) {
+  if (windMul <= 0) return;
+  const S = Math.min(1.5, Math.abs(airU) / 45);
+  const flow = visU(airU) - gspd;               // screen-space air velocity, as particles see it
+  const edgeX = flow < 0 ? W + 6 : -6;
+  const chance = r => Math.random() < r * dt;
+  if (chance(1.5 + 9 * S)) spawnLeaf(upwindX(LEAF_OFF + 2), 30 + Math.random() * (SKY - 70), 0);
+  if (chance(0.6 + 2 * S)) spawnLeaf(Math.random() * W, -LEAF_OFF - 1, 15);    // drifting down from above
+  if (Math.abs(airU) > 10 && chance(10 * S)) {
+    const st = { k: 2, x: Math.random() * W, y: 16 + Math.random() * (SKY - 60), age: 0,
+                 life: 0.35 + Math.random() * 0.4, len: 8 + 14 * Math.min(1, S) };
+    if (!streakHitsPipe(st)) addPart(st);
+  }
+  if (chance((Math.abs(airU) > 8 ? 30 * S : 0) + 14 * gustE * visMul))       // kicked off the ground
+    spawnDust(Math.random() * W, SKY - 2 - Math.random() * 26, -(5 + Math.random() * 15));
+  if (chance(12 * S)) spawnDust(edgeX, 20 + Math.random() * (SKY - 50), 0);      // blowing across the sky
+  if (chance(0.25 * visMul * (0.3 + S))) spawnWhirl(edgeX, 60 + Math.random() * (SKY - 130), Math.random() < 0.5);
+  for (const c of currents) {                   // columns show themselves by what they carry
+    const cx = () => c.x + (Math.random() - 0.5) * c.w * 0.8;
+    if (chance(3 * visMul)) spawnDust(cx(), 30 + Math.random() * (SKY - 50), 0);
+    if (chance(5 * visMul)) {                   // updrafts suck dust up off the ground, downdrafts pour it in from above
+      if (c.s < 0) spawnDust(cx(), SKY - 2 - Math.random() * 8, -40 - Math.random() * 40);
+      else spawnDust(cx(), 2 + Math.random() * 10, 40 + Math.random() * 40);
+    }
+    if (c.s > 0 && chance(0.8 * visMul)) spawnLeaf(cx(), -LEAF_OFF - 1, 30);   // a downdraft pulls leaves in from above
+  }
+  for (const c of currents)                     // eddies shed at column edges
+    if (chance(0.6 * visMul)) spawnSwirl(c.x + sgn() * c.w / 2, 40 + Math.random() * (SKY - 90), c.s < 0 ? -1 : 1);
+  if (Math.abs(airU) > 18 && !dead)             // and in the lee of each pipe lip
+    for (const p of pipes) if (chance(0.5)) {
+      const lx = airU < 0 ? p.x - CAP_X - 6 : p.x + PIPE_W + CAP_X + 6;
+      const ly = Math.random() < 0.5 ? p.top - CAP_H / 2 : p.bot + CAP_H / 2;
+      spawnSwirl(lx, ly, airU < 0 ? 1 : -1);
+    }
+}
+function stepAir(dt) {
+  spawnAir(dt);
+  if (!airParts.length) return;
+  const S = Math.min(1, Math.abs(airU) / 45);
+  const whirls = airParts.filter(p => p.whirl);
+  for (const p of airParts) {
+    p.age += dt;
+    windAt(p.x, p.y);
+    if (p.k !== 2) pipeFlow(p.x, p.y); else { PF.u = 1; PF.v = 0; PF.calm = 1; }
+    const flow = visU(WA.u) * PF.u - gspd;
+    const vAir = Math.max(-STORM.vAirMax, Math.min(STORM.vAirMax, WA.a * 1.0)) + PF.v;   // rising air carries things up, sinking air down
+    if (p.k < 2) for (const w of whirls) {            // caught in a whirlwind: orbit it
+      const dx = p.x - w.x, dy = p.y - w.y, R = w.r * 1.8;
+      const d = Math.hypot(dx, dy);
+      if (d < 1 || d > R) continue;
+      const e = Math.sin(Math.PI * Math.min(1, w.age / w.life));   // spins up, spins down
+      const t = w.str * e * (1 - 0.5 * d / R) * dt;
+      p.x += (-dy / d * w.dir - dx / d * 0.25) * t;
+      p.y += ( dx / d * w.dir - dy / d * 0.25) * t * 0.8;
+    }
+    if (p.k === 0) {                                  // leaf: inertia, flutter, tumble
+      p.vx += (flow - p.vx) * (1 - Math.exp(-2.5 * dt));
+      p.vy += (22 + vAir - p.vy) * (1 - Math.exp(-4 * dt));
+      p.ph += 5 * dt; p.lph += p.lw * (0.6 + S) * dt;
+      const loop = (6 + 26 * S) * Math.min(2, Math.max(1, visMul) ** 0.5) * PF.calm;   // loop-de-loops grow with the wind
+      p.x += (p.vx + (Math.sin(p.ph) * 12 + Math.cos(p.lph) * loop) * PF.calm) * dt;
+      p.y += (p.vy + Math.sin(p.lph) * loop * 0.8) * dt;
+      p.poseT -= dt;
+      if (p.poseT <= 0) { p.poseT = 0.28 - 0.18 * S; p.pose = (p.pose + 1) % LEAF_POSES.length; }
+      if (p.y > SKY - 3) { p.y = SKY - 3; p.vy = 0; p.life = Math.min(p.life, p.age + 0.6); }
+    } else if (p.k === 1) {                           // dust: light, follows the air closely
+      p.vx += (flow - p.vx) * (1 - Math.exp(-6 * dt));
+      p.x += p.vx * dt; p.y += (p.vy + vAir) * dt;
+    } else if (p.k === 2) {                           // streak: exactly the air
+      p.x += flow * dt;
+      if (streakHitsPipe(p)) p.age = p.life;          // a streak ends where it meets a pipe
+    } else {                                          // swirl / whirlwind: drifts with the air
+      p.x += flow * (p.whirl ? 0.85 : 1) * dt; p.y += vAir * 0.2 * dt;
+    }
+    if (p.k === 0) keepOut(p, 3, 3, 2, 2);            // nothing passes through a pipe
+    else if (p.k === 1) keepOut(p, 0, p.big ? 2 : 1, 0, 1);
+    else if (p.whirl) keepOut(p, 10, 10, 10, 10);
+  }
+  airParts = airParts.filter(p => p.age < p.life && p.x > -48 && p.x < W + 48 && p.y > -16 && p.y < SKY + 4);
+}
+
+/* ---------- bird sprite: 17x12 authored, 34x24 rendered ---------- */
+const FRAMES = [
+  "......................KKKKKKK........KKYYYYYWWK......KYYDYYYWWWK......KDDDDYYWWWKK....KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDCCCCCRRK....KYYYCCCCCCOOK....KKYYYCCCCKKK.......KKKKKKK.......................",
+  "......................KKKKKKK........KKYYYYYWWK......KYYYYYYYWWWK.....KYYYYYYYWWWKK...KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDDCCCCCRRK..KDDDDDCCCCCCOOK...KYYYCCCCCKKKK......KKKKKKK.......................",
+  "......................KKKKKKK........KKYYYYYWWWK.....KYYYYYYYWWWKK...KYYYYYYYCCWWRRK..KDDDDDDDCCCRRRK..KDDDDDDCCCCCCRK..KDDDDCCCCCCCOOK...KDDDCCCCCKKKK.....KKKKKKK.......................",
+  "......................KKKKKKK........KKYYYYYWWK......KYYYYYYYWWWK.....KYYYYYYYWWWKK...KDDDDDDYCCWWRRK..KDDDDDDCCCCRRRK..KDDDDDDCCCCCRRK..KDDDDDCCCCCCOOK...KYYYCCCCCKKKK......KKKKKKK......................."
+];
+const SPR = { K: C.ink, Y: C.birdY, D: C.birdD, C: C.birdC, W: C.eye, R: C.beak, O: C.beakLo };
+/* electrocuted "x-ray" palette: glowing outline, dark body */
+const SPR_ZAP = { K: "#fffbe0", Y: "#2a2f7a", D: "#151845", C: "#3a4290", W: "#ffffff", R: "#7f8cff", O: "#4a55c0" };
+
+
+/* ---------- paint ---------- */
+const cvs = document.getElementById("game");
+const vctx = cvs.getContext("2d", { alpha: false });   // what the viewer sees
+const buf = document.createElement("canvas");             // the scene is painted here
+const ctx = buf.getContext("2d", { alpha: false });
+const stage = document.getElementById("stage");
+let R = 2, DS = 2;   // R = buffer pixels per logical px (integer), DS = device px per logical px
+
+/* CANVAS TYPE - the face is 1050 units/em, so 14px maps em to 21 device units
+   and the 825-unit ink box to 16.5: only multiples of 14 (14 here, 28 for the
+   score and CRASHED) put every stem and every 16px advance on whole pixels
+   instead of resampling them. The face has ONE weight, so no fake-bold. */
+const FAM = '"04b_19", ui-monospace, monospace';
+const F = { hud: '14px ' + FAM, big: '28px ' + FAM };
+
+/* Kick the embedded face so frame 1 already uses it instead of the fallback
+   stack; the data URI is inline, so this resolves without a network request. */
+if (document.fonts && document.fonts.load) {
+  Promise.all(["14px", "28px"].map(s => document.fonts.load(s + ' "04b_19"'))).catch(() => {});
+}
+
+/* Centring is done by hand: measureText returns the advance sum, the left edge
+   is rounded, and glyphs then land on whole pixels rather than half of one. */
+function txt(s, x, y, col, font, align) {
+  ctx.font = font;
+  const w = ctx.measureText(s).width;
+  const x0 = align === "right" ? x - w : align === "center" ? x - w / 2 : x;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = col;
+  ctx.fillText(s, Math.round(x0), Math.round(y));
+}
+
+
+function fit() {
+  // The stage is whatever space CSS leaves between the gutters and the caption,
+  // so this works the same on phones, in iframes and with the address bar moving.
+  const box = stage.getBoundingClientRect();
+  if (box.width < 1 || box.height < 1) return;
+  const dpr = devicePixelRatio || 1;
+  DS = Math.min(box.width / W, box.height / H) * dpr;
+  const devW = Math.max(1, Math.floor(W * DS)), devH = Math.max(1, Math.floor(H * DS));
+  DS = Math.min(devW / W, devH / H);
+  if (cvs.width !== devW || cvs.height !== devH) {
+    // display canvas = exact device pixels, so the scanlines land on real rows
+    cvs.width = devW; cvs.height = devH;
+    cvs.style.width = (devW / dpr) + "px";
+    cvs.style.height = (devH / dpr) + "px";
+  }
+  // scene buffer = largest whole multiple of the grid not above the device size;
+  // it is then stretched (nearest-neighbour) by a factor in [1, 2)
+  const r = Math.max(1, Math.floor(DS));
+  if (r !== R || buf.width !== W * r) { R = r; buf.width = W * R; buf.height = H * R; }
+  ctx.setTransform(R, 0, 0, R, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  vctx.imageSmoothingEnabled = false;
+}
+fit();
+addEventListener("resize", fit);
+addEventListener("orientationchange", fit);
+if (window.ResizeObserver) new ResizeObserver(fit).observe(stage);   // caption reflow, toolbars, iframes
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+function px(x, y, w, h, col) {
+  ctx.fillStyle = col;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+
+function sky() {
+  const cols = [C.skyA, C.skyA, C.skyB, C.skyB, C.skyC, C.skyC, C.skyD];
+  const bh = Math.ceil(SKY / cols.length);
+  for (let i = 0; i < cols.length; i++) px(0, i * bh, W, bh, cols[i]);
+}
+
+function clouds() {
+  ctx.fillStyle = C.cloud;
+  for (let i = 0; i < 3; i++) {
+    const x = Math.round((((i * 118) - cloudX) % (W + 120) + W + 120) % (W + 120) - 60);
+    const y = 46 + i * 58;
+    ctx.fillRect(x, y, 44, 10);
+    ctx.fillRect(x + 8, y - 6, 28, 6);
+    ctx.fillRect(x + 16, y - 11, 14, 5);
+    ctx.fillRect(x - 6, y + 10, 56, 6);
+  }
+}
+
+function skyline() {
+  ctx.fillStyle = C.hillDark;
+  for (let i = 0; i < 8; i++) {
+    const x = Math.round((((i * 46) - dist * 0.06) % (W + 70) + W + 70) % (W + 70) - 35);
+    ctx.fillRect(x, SKY - 26, 34, 26);
+  }
+  ctx.fillStyle = C.hill;
+  for (let i = 0; i < 9; i++) {
+    const x = Math.round((((i * 40) - dist * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
+    ctx.fillRect(x, SKY - 14, 30, 14);
+    ctx.fillRect(x + 4, SKY - 18, 22, 4);
+  }
+}
+
+/* isTop is passed in, never inferred: inferring it from position mis-caps
+   long lower pipes, which is the bug reported earlier in this build. */
+function pipePart(x, y0, y1, isTop) {
+  const lipY = isTop ? y1 - CAP_H : y0;
+  const shaftY0 = isTop ? y0 : y0 + CAP_H;
+  const shaftY1 = isTop ? y1 - CAP_H : y1;
+
+  for (const [ox, bw, col] of SHAFT_BANDS) px(x + ox - CAP_X, shaftY0, bw, shaftY1 - shaftY0, col);
+  for (const [ox, bw, col] of LIP_BANDS)   px(x + ox - CAP_X, lipY, bw, CAP_H, col);
+
+  // cap edges: dark rule top and bottom of the lip, and a rule at the join
+  px(x - CAP_X, lipY, CAP_W, 2, C.pipeO);
+  px(x - CAP_X, lipY + CAP_H - 2, CAP_W, 2, C.pipeO);
+}
+
+function ground() {
+  const off = Math.round(dist % 24);
+  // grass tufts lean with the wind: 1 px, 2 px when it is strong
+  const au = Math.abs(airU);
+  const lean = Math.sign(airU) * ((au > 8 ? 1 : 0) + (au > 30 ? 1 : 0));
+  px(0, SKY, W, GROUND, C.sand);
+  px(0, SKY, W, 12, C.grass);
+  px(0, SKY + 12, W, 3, C.grassDark);
+  for (let x = -24; x < W + 24; x += 24) {
+    px(x - off, SKY + 30, 12, GROUND - 30, C.sandDark);
+    px(x - off + 14, SKY + 19, 6, 4, C.grassDark);
+    px(x - off + 14 + lean, SKY + 15, 6, 4, C.grassDark);
+  }
+}
+
+function drawStreaksSwirls() {
+  for (const p of airParts) {
+    if (p.k < 2) continue;
+    let e = Math.sin(Math.PI * Math.min(1, p.age / p.life));      // fade in and out
+    if (p.k === 2) {
+      ctx.globalAlpha = 0.75 * e;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), Math.round(p.len), 1);
+      ctx.globalAlpha = 0.35 * e;                                  // fainter tail, one row down
+      ctx.fillRect(Math.round(p.x + p.len * 0.3), Math.round(p.y) + 1, Math.round(p.len * 0.6), 1);
+    } else {
+      const n = p.whirl ? 10 : 7, r = p.r * (1 - 0.45 * p.age / p.life) * (p.whirl ? 0.8 : 1);
+      if (p.whirl) e *= 0.45;
+      ctx.fillStyle = "#ffffff";
+      for (let i = 0; i < n; i++) {                                // head first, tail curls inward
+        const ang = p.ph + p.dir * (p.age * 7 - i * 0.55);
+        const rr = r * (1 - 0.07 * i);
+        ctx.globalAlpha = 0.9 * e * (1 - 0.8 * i / n);
+        const s = i < 3 ? 2 : 1;
+        const dx = Math.round(p.x + Math.cos(ang) * rr), dy = Math.round(p.y + Math.sin(ang) * rr * 0.8);
+        if (inPipe(dx, dy, s, s)) continue;
+        ctx.fillRect(dx, dy, s, s);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDustLeaves(nearLayer) {
+  for (const p of airParts) {
+    if (p.k === 1 && !nearLayer) {
+      const e = Math.sin(Math.PI * Math.min(1, p.age / p.life));
+      ctx.globalAlpha = e;
+      ctx.fillStyle = p.col;
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), p.big ? 2 : 1, 1);
+    } else if (p.k === 0 && p.near === nearLayer) {
+      const pose = LEAF_POSES[p.pose], x0 = Math.round(p.x) - 3, y0 = Math.round(p.y) - 2;
+      ctx.globalAlpha = Math.min(1, (p.life - p.age) / 0.4);      // fade once landed
+      for (let ry = 0; ry < 2; ry++) for (let rx = 0; rx < 3; rx++) {
+        const ch = pose[ry][rx];
+        if (ch === ".") continue;
+        ctx.fillStyle = ch === "B" ? p.col[0] : p.col[1];
+        ctx.fillRect(x0 + rx * 2, y0 + ry * 2, 2, 2);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* WIND << 18 under SPD/GAP, with a pixel arrow while the bird is in a current */
+function drawWindHud() {
+  const mag = Math.round(Math.abs(airU));
+  const s = windMul <= 0 ? "WIND OFF" : mag < 3 ? "WIND CALM" : "WIND " + (airU < 0 ? "<< " : ">> ") + mag;
+  txt(s, W - 8, 34, "rgba(255,255,255,.9)", F.hud, "right");
+  if (Math.abs(aBird) < 25) return;
+  ctx.font = F.hud;
+  const x = Math.round(W - 8 - ctx.measureText(s).width - 14), y = 23;
+  const up = aBird < 0;
+  const head = [[3,1],[2,3],[1,5],[0,7]], stem = [[2,3],[2,3],[2,3],[2,3],[2,3],[2,3]];
+  const rows = up ? head.concat(stem) : stem.concat(head.slice().reverse());
+  ctx.fillStyle = C.ink;                                           // 1 px outline
+  rows.forEach(([o, w], i) => ctx.fillRect(x + o - 1, y + i - 1, w + 2, 3));
+  ctx.fillStyle = up ? "#bff7a0" : "#ffb38a";
+  rows.forEach(([o, w], i) => ctx.fillRect(x + o, y + i, w, 1));
+}
+
+function drawBird() {
+  const f = FRAMES[frameIdx] || FRAMES[0];
+  const pal = dead && zapOn ? SPR_ZAP : SPR;
+  ctx.save();
+  if (!dead) {
+    ctx.translate(Math.round(birdX), Math.round(bird.y));
+    ctx.rotate(birdRot());
+  } else if (!falling) {
+    ctx.translate(Math.round(birdX) + jit[0], Math.round(bird.y) + jit[1]);
+    ctx.rotate(deathRot);
+  } else {
+    ctx.translate(Math.round(birdX), Math.round(bird.y));
+    ctx.scale(1, -1);                            // belly up
+    ctx.rotate(Math.min(0.5, (deadT - D_ZAP) * 0.6));
+  }
+  for (let y = 0; y < BH; y++) {
+    for (let x = 0; x < BW; x++) {
+      const col = pal[f.charAt(y * BW + x)];
+      if (!col) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect((x * BS) - (SPR_W >> 1), (y * BS) - (SPR_H >> 1), BS, BS);
+    }
+  }
+  ctx.restore();
+}
+
+function drawFeathers() {
+  for (const f of feathers) {
+    ctx.save();
+    ctx.translate(Math.round(f.x), Math.round(f.y));
+    ctx.rotate(f.rot);
+    ctx.fillStyle = C.ink;
+    ctx.fillRect(-(f.len >> 1) - 1, -2, f.len + 2, 4);
+    ctx.fillStyle = f.col;
+    ctx.fillRect(-(f.len >> 1), -1, f.len, 2);
+    ctx.fillStyle = C.birdD;
+    ctx.fillRect(-(f.len >> 1), 0, 1, 1);        // quill
+    ctx.restore();
+  }
+}
+
+function boltLine(x0, y0, x1, y1, s, col) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1;
+  ctx.fillStyle = col;
+  for (let i = 0; i <= n; i++) {
+    const x = Math.round(x0 + (x1 - x0) * i / n), y = Math.round(y0 + (y1 - y0) * i / n);
+    ctx.fillRect(x - (s >> 1), y - (s >> 1), s, s);
+  }
+}
+
+function drawBolts() {
+  for (const pts of bolts) {
+    for (let i = 1; i < pts.length; i++) boltLine(pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1], 3, "#5fd8ff");
+  }
+  for (const pts of bolts) {
+    for (let i = 1; i < pts.length; i++) boltLine(pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1], 1, "#ffffff");
+  }
+}
+
+function outlineText(s, x, y, col, font) {
+  ctx.font = font;
+  const w = ctx.measureText(s).width;
+  const x0 = Math.round(x - w / 2), y0 = Math.round(y);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = C.ink;
+  for (const d of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1]]) ctx.fillText(s, x0 + d[0], y0 + d[1]);
+  ctx.fillStyle = col;
+  ctx.fillText(s, x0, y0);
+}
+
+function draw() {
+  sky();
+  clouds();
+  skyline();
+  for (const p of pipes) {
+    pipePart(p.x, 0, p.top, true);
+    pipePart(p.x, p.bot, SKY, false);
+  }
+  ground();
+  drawStreaksSwirls();                           // in FRONT of the pipes: the pipes are solid, so
+  drawDustLeaves(false);                         // nothing is ever on top of one to need hiding
+  if (dead && zapOn && !falling) {               // electric glow behind the bird
+    ctx.fillStyle = "rgba(127,232,255,.28)";
+    ctx.fillRect(birdX - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
+  }
+  drawBird();
+  drawDustLeaves(true);                          // the near leaves pass in front of the bird
+  drawBolts();
+  drawFeathers();
+
+  outlineText(String(score), W / 2, 78, "#ffffff", F.big);
+  txt("BEST " + best, 8, 16, "rgba(255,255,255,.9)", F.hud, "left");
+  txt("SPD " + Math.round(speed) + " GAP " + Math.round(gap), W - 8, 16,
+      "rgba(255,255,255,.9)", F.hud, "right");
+  drawWindHud();
+
+  const k = 1 - Math.exp(-score / TAU);
+  ctx.fillStyle = "rgba(0,0,0,.35)";
+  ctx.fillRect(8, 22, 96, 5);
+  ctx.fillStyle = C.birdY;
+  ctx.fillRect(8, 22, 96 * k, 5);
+  if (cooldown > 0 && !dead) {
+    ctx.fillStyle = "rgba(255,255,255,.55)";
+    ctx.fillRect(8, 30, 96 * (cooldown / COOLD), 2);
+    txt("WING COOLDOWN", 8, 48, "rgba(255,255,255,.75)", F.hud, "left");
+  }
+
+  if (dead) {
+    ctx.fillStyle = "rgba(255,255,255," + (0.5 * flash) + ")";
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (dead && offT > 0) {
+    ctx.fillStyle = "rgba(20,32,15,.92)";
+    ctx.fillRect(W / 2 - 76, H / 2 - 40, 152, 80);
+    txt("CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
+    txt("score " + score, W / 2, H / 2 + 8, "#9fb0bd", F.hud, "center");
+    txt("restarting...", W / 2, H / 2 + 26, "#9fb0bd", F.hud, "center");
+  }
+
+  /* blit the scene to the display canvas, then draw scanlines in DEVICE
+     pixels at an integer period (~1.5 logical px) so the spacing is exact. */
+  vctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
+  const O = Math.max(3, Math.round(1.5 * DS));
+  vctx.fillStyle = "rgba(0,0,0,.15)";
+  for (let y = 0; y < cvs.height; y += O) vctx.fillRect(0, y, cvs.width, 1);
+}
+
+/* ---------- WIND slider: log scale OFF, x0.1 .. x20 (x20 = full hurricane) ----------
+   Slider 0..1000. The far-left notch is OFF; the rest is x0.1 * 200^(t/1000), rounded
+   to a readable value, with a detent at the x1 default. A ?wind= outside the range
+   (x5000, x0.05) parks the thumb at the end but keeps the real value until it moves. */
+const WSL_MIN = 0.1, WSL_MAX = 20, WSL_OFF = 12;
+function sliderToWind(t) {
+  if (t < WSL_OFF) return 0;
+  let w = WSL_MIN * Math.pow(WSL_MAX / WSL_MIN, (t - WSL_OFF) / (1000 - WSL_OFF));
+  if (Math.abs(Math.log(w)) < 0.06) return 1;                       // detent at the default
+  return w < 1 ? Math.round(w * 100) / 100 : w < 10 ? Math.round(w * 10) / 10 : Math.round(w);
+}
+function windToSlider(w) {
+  if (w <= 0) return 0;
+  const t = WSL_OFF + (1000 - WSL_OFF) * Math.log(w / WSL_MIN) / Math.log(WSL_MAX / WSL_MIN);
+  return Math.max(WSL_OFF, Math.min(1000, Math.round(t)));
+}
+function windLabel(w) {
+  if (w <= 0) return "off";
+  const st = w <= 2 ? 0 : Math.min(1, Math.log(w / 2) / Math.log(10));
+  return "x" + w + (st >= 1 ? " hurricane" : st > 0 ? " storm" : "");
+}
+const windIn = document.getElementById("wind"), windOut = document.getElementById("windval");
+function showWind() {
+  const s = windLabel(windMul);
+  windOut.textContent = s;
+  windOut.className = windMul <= 0 ? "off" : storm >= 1 ? "hurricane" : storm > 0 ? "storm" : "";
+  windIn.setAttribute("aria-valuetext", s);
+}
+function changeWind(v) {
+  if (v === windMul) return;
+  setWindMul(v);
+  if (windMul <= 0) {                            // calm at once: no stale gust keeps blowing
+    airU = 0; aBird = 0; aFelt = 0; gustE = 0; gusts = []; wind.u = 0; wind.target = 0;
+  }
+  showWind();
+  try {                                          // a reload keeps the setting
+    const q = new URLSearchParams(location.search); q.set("wind", String(windMul));
+    history.replaceState(null, "", "?" + q.toString() + location.hash);
+  } catch (e) {}
+}
+windIn.value = String(windToSlider(windMul));
+showWind();
+windIn.addEventListener("input", () => changeWind(sliderToWind(+windIn.value)));
+windIn.addEventListener("keydown", e => {         // 1000 fine steps are for drags; keys move in notches
+  const k = e.key, d = k === "ArrowRight" || k === "ArrowUp" ? 25 : k === "ArrowLeft" || k === "ArrowDown" ? -25 :
+            k === "PageUp" ? 100 : k === "PageDown" ? -100 : 0;
+  if (!d) return;                                 // Home / End keep their native jump to OFF / x20
+  e.preventDefault();
+  const t = +windIn.value;
+  windIn.value = String(Math.max(0, Math.min(1000, d < 0 && t <= WSL_OFF + 25 ? 0 : t + d)));
+  changeWind(sliderToWind(+windIn.value));
+});
+reset();
+let acc = 0, last = performance.now();
+function loop(now) {
+  acc = Math.min(0.25, acc + (now - last) / 1000);
+  last = now;
+  while (acc >= FIXED) { step(FIXED); acc -= FIXED; }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

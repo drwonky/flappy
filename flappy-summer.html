@@ -56,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">sun</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">summer r6</div>
+<div id="hud">summer r7</div>
 
 <script>
 "use strict";
@@ -1303,11 +1303,13 @@ function disc(cx, cy, r, col) {                   // a pixel circle, 2px rows
     ctx.fillRect(Math.round(cx - h), Math.round(cy + y), 2 * h, 2);
   }
 }
-function drawBirdAura() {                          // 2. a hot glow in the sun, a cool one in shade
+function drawBirdAura() {                          // 2. a red glow that grows with the heat, in sun or shade
   if (dead) return;
-  const e = heatE(), lit = 1 - shadeK, puls = 0.75 + 0.25 * Math.sin(airClock * 10);
-  if (lit > 0 && e > 0.08) disc(birdX, bird.y, 18, "rgba(255,110,30," + (lit * puls * (0.22 + 0.33 * e)).toFixed(3) + ")");
-  if (shadeK > 0 && skin > 0.02) disc(birdX, bird.y, 17, "rgba(130,215,255," + (shadeK * Math.min(0.38, 0.16 + skin)).toFixed(3) + ")");
+  const e = heatE();
+  if (e < 0.04) return;
+  const puls = 1 - (0.12 + 0.2 * e) * (0.5 + 0.5 * Math.sin(airClock * (4 + 8 * e)));   // throbs faster as it cooks
+  disc(birdX, bird.y, Math.round(13 + 9 * e), "rgba(220,30,10," + (puls * (0.06 + 0.34 * e)).toFixed(3) + ")");
+  if (e > 0.35) disc(birdX, bird.y, Math.round(10 + 4 * e), "rgba(255,60,20," + (puls * 0.4 * (e - 0.35)).toFixed(3) + ")");
 }
 function drawSweat() {
   ctx.fillStyle = "#d6f2ff";

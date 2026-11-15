@@ -56,7 +56,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">seasons r2</div>
+<div id="hud">seasons r3</div>
 
 <script>
 "use strict";
@@ -154,6 +154,7 @@ const SUN = { period: 110, swing: 0.55 };   // s per swing back and forth, max s
    ============================================================ */
 const HEAT = {
   rate: 0.140,        // skin heat per second in full sun at x1
+  smokeAt: 0.25,      // heat at which the bird starts to smoke (spring sun never gets it there)
   cool: 0.50,         // fraction of skin heat shed per second in full shade (typical wind)
   air: 0.06,          // ...and in the sun, by moving air (typical wind)
   gain: 2.5,          // the core heads for gain x skin heat: a long hot run cooks it...
@@ -188,6 +189,7 @@ const ICE = {
   shed: 0.012,        // rime knocked off per flap
   harden: 0.030,      // fraction of the rime that turns to glaze per second
   melt: 0.06,         // ice melted per second in full summer sun
+  thaw: 0.010,        // ice melted per second by mild air once winter is over, sun or not
   lift: 0.45, weight: 0.32, curve: 2.0
 };
 /* (the cloud that slides over the sun is grey rain cloud, or wildfire smoke in summer) */
@@ -217,10 +219,10 @@ const SEASON_COLS = ["#b8f08a", "#ffc070", "#ff9a4a", "#cfe8ff"];
 /* how each season sets the scene: wind strength, sun on the bird, how visible the sun
    is (shadows), snowfall, desert dust, wildfire smoke, falling leaves, cloud alpha */
 const SEASON_FX = [
-  { wind: 0.7, sun: 0.50, vis: 0.75, snow: 0, desert: 0,   smoke: 0,    leaves: 0.6, cloudA: 1.0  },
-  { wind: 0.8, sun: 1.00, vis: 1.00, snow: 0, desert: 1,   smoke: 1,    leaves: 0.4, cloudA: 0.45 },
-  { wind: 1.5, sun: 0.40, vis: 0.65, snow: 0, desert: 0,   smoke: 0.25, leaves: 1.6, cloudA: 0.9  },
-  { wind: 1.2, sun: 0.12, vis: 0.30, snow: 1, desert: 0,   smoke: 0,    leaves: 0,   cloudA: 0.95 }
+  { wind: 0.7, sun: 0.50, vis: 0.75, snow: 0, desert: 0,   smoke: 0,    leaves: 0.6, cloudA: 1.0,  heat: 0.20 },
+  { wind: 0.8, sun: 1.00, vis: 1.00, snow: 0, desert: 1,   smoke: 1,    leaves: 0.4, cloudA: 0.45, heat: 1.00 },
+  { wind: 1.5, sun: 0.40, vis: 0.65, snow: 0, desert: 0,   smoke: 0.25, leaves: 1.6, cloudA: 0.9,  heat: 0.32 },
+  { wind: 1.2, sun: 0.12, vis: 0.30, snow: 1, desert: 0,   smoke: 0,    leaves: 0,   cloudA: 0.95, heat: 0.08 }
 ];
 const PALS = [
   { skyA:"#6cc5de", skyB:"#9adcec", skyC:"#c6ecf2", skyD:"#e4f6f7", cloud:"#eef7fa", hill:"#7fbf4d", hillDark:"#5f9a38",
@@ -713,7 +715,8 @@ function stepIce(dt) {
   rime -= h; glaze += h;
   // the sun melts it: the soft rime first, then the glaze
   const sunOn = sunK() * SFX.sun * skyEv.k * (1 - shade);
-  iceOut = rime + glaze > 0 ? ICE.melt * Math.max(0, sunOn - 0.15) / 0.85 : 0;
+  iceOut = rime + glaze > 0 ? ICE.melt * Math.max(0, sunOn - 0.08) / 0.92
+         + ICE.thaw * Math.max(0, 1 - 2 * SFX.snow) * (1 + rainK) : 0;   // and out of winter the mild air (and the rain) thaw it too
   let m = iceOut * dt;
   const r0 = rime; rime = Math.max(0, rime - m); m -= r0 - rime; glaze = Math.max(0, glaze - m);
   if (rime + glaze > 1) rime = Math.max(0, 1 - glaze);
@@ -741,7 +744,9 @@ function stepHeat(dt) {
   const ins = 1 - Math.min(1, 2 * (rime + glaze));     // the sun's heat goes into melting the ice first
   skin += (HEAT.rate * sun * ins * (1 - shade) - (HEAT.cool * shade * (0.6 + 0.4 * wc) + HEAT.air * wc) * skin) * dt;
   skin = Math.max(0, Math.min(1, skin));
-  const goal = Math.min(1, HEAT.gain * skin);
+  const skinMax = SFX.heat / (HEAT.gain + 0.6);        // the season's sun can only warm the bird so far:
+  if (skin > skinMax) skin += (skinMax - skin) * (1 - Math.exp(-dt / 2));   // spring warms it, summer cooks it
+  const goal = Math.min(SFX.heat, HEAT.gain * skin);
   core += (goal - core) * (1 - Math.exp(-dt / (goal > core ? HEAT.up : HEAT.down)));
   heatFx();
   if (shade < 1 && skin > 0.25 && Math.random() < 9 * (skin - 0.2) * dt)   // sweat flicked off the bird
@@ -756,7 +761,7 @@ function stepHeat(dt) {
 const TRAIL_COLS = [[170, 150, 138], [80, 62, 56], [34, 26, 24]];
 function stepTrail(dt) {
   const e = dead ? 0 : heatE();
-  if (e > 0.06 && Math.random() < (8 + 50 * e) * dt) {
+  if (e > HEAT.smokeAt && Math.random() < (8 + 50 * e) * dt) {
     const c = e < 0.5 ? TRAIL_COLS[0].map((v, i) => v + (TRAIL_COLS[1][i] - v) * e * 2)
                       : TRAIL_COLS[1].map((v, i) => v + (TRAIL_COLS[2][i] - v) * (e - 0.5) * 2);
     trail.push({ x: birdX - 7 + Math.random() * 5, y: bird.y - 3 + Math.random() * 5,
@@ -1815,7 +1820,7 @@ function drawHeatHud() {                           // heat (or ice), spelled out
     txt("BIRD " + Math.round(104 + 16 * e) + "F", W - 8, 52, tcol, F.hud, "right");
     ctx.fillStyle = "#c0301a"; ctx.fillRect(bx, by, Math.round(bw * core), 5);
     ctx.fillStyle = "#ffb03a"; ctx.fillRect(bx + Math.round(bw * core), by, Math.round(bw * Math.min(0.6 * skin, 1 - core)), 5);
-    const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : "IN THE SUN";
+    const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : SFX.heat < 0.5 ? "WARM SUN" : "IN THE SUN";
     txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
   }
   const wc = windCool(), c = cloudCover(), b = blazeK();

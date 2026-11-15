@@ -57,7 +57,7 @@
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">sun</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">autopilot, no input. <b>summer</b>: dust and wildfire smoke ride the wind, and the <b>sun</b> bakes the bird - it cools off in the <b>shade</b> the pipes cast. more sun, faster heat</div>
+<div id="hud">autopilot, no input. <b>summer</b>: dust and wildfire smoke ride the wind, and the <b>sun</b> bakes the bird - it cools off in the <b>shade</b> the pipes cast, and smokes when it cooks. <b>sand</b> drifts up across games until a gap fills and the wind <b>blows it clear</b>. more sun, faster heat</div>
 
 <script>
 "use strict";
@@ -184,6 +184,7 @@ const C = {
   cloud:"#8a5a44", hill:"#b0683a", hillDark:"#7e4628",               // smoke banks, mesas
   grass:"#c48a4a", grassDark:"#8e5a2c",                              // baked crust, dry tufts
   sand:"#e0a85c", sandDark:"#c88c46",
+  dune:"#eebb6c", duneShade:"#cf9550", duneEdge:"#9a6630",          // drifted sand
   sun:"#fff3c2", sunGlow:"#ffd66e", shadow:"rgba(60,22,6,.30)",
   cactus:"#5f8a3a", cactusLt:"#86b450", cactusDk:"#3c5e22",
   pipeO:"#14200f", pipeLt:"#8ed04a", pipeHi:"#74bf2e", pipeMid:"#5aa81f", pipeLo:"#3d7a12",
@@ -238,6 +239,21 @@ const WA = { u: 0, a: 0 };                          // windAt() result, reused
 /* summer state: the sun, smoke and dust carry on between games, the heat does not */
 let sunPh = Math.random() * 6.283, sunSX = 0;
 let smoke = [], cacti = [];
+/* SAND - one depth for the whole world (px), like the winter snow. Blown sand builds
+   up on the ground, banks against the pipes and heaps on every bottom lip; it keeps
+   building between games and is saved in the browser. When a heap closes a gap
+   (less than `block` px left to fly through) the wind scours it all back to `start`
+   and the cycle begins again. Faster in a dust storm. ?sand=N sets the depth. */
+const SAND = { start: 2, max: 400, rate: 0.15, pipeK: 1.0, ledgeMax: 3, block: 24, clear: 2.5 };
+const SAND_KEY = "flappy-summer-sand", SAND_COLS = 34;   // a lip heap is 34 two-px columns
+let sandD = (() => {
+  const ok = v => isFinite(v) && v >= 0;
+  try { const q = parseFloat(new URLSearchParams(location.search).get("sand")); if (ok(q)) return Math.min(q, SAND.max); } catch (e) {}
+  try { const v = parseFloat(localStorage.getItem(SAND_KEY)); if (ok(v)) return Math.min(v, SAND.max); } catch (e) {}
+  return SAND.start;
+})();
+let clearT = 0, clearFrom = 0, clears = 0, saveT = 0;
+let trail = [];                                       // smoke pouring off a hot bird
 const dustW = { k: 1, target: 1, next: 0 }, smokeW = { k: 1, target: 1, next: 0 };
 let skin = 0, core = 0, shade = 0, flapEff = FLAP, gEff = GRAVITY, flaps = 0;
 let sweat = [], rayT = 0, shadeK = 0;                // sweat drops, sunbeam animation, eased shade
@@ -265,14 +281,16 @@ function reset() {
   falling = false; offT = 0; deathRot = 0;
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
-  skin = 0; core = 0; shade = 0; shadeK = 0; flaps = 0; sweat = []; heatFx();
+  skin = 0; core = 0; shade = 0; shadeK = 0; flaps = 0; sweat = []; trail = []; heatFx();
   ramp(0); gspd = speed;
   firstPipes();
 }
 
 function spawn(x = W + REACH) {
   const top = 30 + Math.random() * (SKY - 60 - gap);
-  pipes.push({ x: x, top: top, bot: top + gap, passed: false });
+  pipes.push({ x: x, top: top, bot: top + gap, passed: false,
+               sf: 0.85 + Math.random() * 0.3,          // this pipe's share of the sand
+               cut: new Float32Array(SAND_COLS) });      // where the bird has plowed through its heap
   aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
   spawnCactus(x + PIPE_W / 2 + speed * spaceSec / 2);     // half way to the next pipe
 }
@@ -302,7 +320,7 @@ function step(dt) {
   if (dead) {
     gspd = 0;                      // ...but the world no longer scrolls
     cloudX += -airU * 0.3 * dt;
-    stepSmoke(dt);
+    stepSmoke(dt); stepSand(dt); stepTrail(dt);
     stepAir(dt); stepFeathers(dt); stepDeath(dt); return;
   }
   stepFeathers(dt);
@@ -329,6 +347,7 @@ function step(dt) {
   for (const c of cacti) c.x -= gspd * dt;
   cacti = cacti.filter(c => c.x + 30 > 0);
   stepSmoke(dt);
+  stepSand(dt);
 
   // what the bird feels: capped lift/sink plus a zero-mean wobble in gusts and at column edges
   windAt(birdX, bird.y);
@@ -354,6 +373,8 @@ function step(dt) {
   let n = null;
   for (const p of pipes) { if (p.x + PIPE_W > birdX - HW) { n = p; break; } }
   stepHeat(dt);
+  stepTrail(dt);
+  plowSand();
   if (n && cooldown <= 0 && wantFlap(n)) {
     bird.vy = -flapEff;                          // a cooked bird beats weaker
     flaps++; skin = Math.min(1, skin + HEAT.flap * sunK());
@@ -535,14 +556,118 @@ function stepHeat(dt) {
   skin = Math.max(0, Math.min(1, skin));
   core = Math.min(1, core + HEAT.soak * Math.max(0, skin - HEAT.soakAt) * dt);
   heatFx();
-  if (skin > 0.3 && Math.random() < 14 * (skin - 0.2) * dt)   // heat shimmer coming off the bird
-    addPart({ k: 1, x: birdX - 6 + Math.random() * 12, y: bird.y - HH - 2, vx: visU(airU) - gspd, vy: -35 - Math.random() * 25,
-              age: 0, life: 0.5 + Math.random() * 0.4, col: Math.random() < 0.5 ? "#fff0c8" : "#ffc070", big: false });
   if (shade < 1 && skin > 0.25 && Math.random() < 9 * (skin - 0.2) * dt)   // sweat flicked off the bird
     sweat.push({ x: birdX + (Math.random() * 2 - 1) * 8, y: bird.y - 4 + Math.random() * 6,
                  vx: -20 - Math.random() * 40, vy: -40 - Math.random() * 50, age: 0 });
   for (const d of sweat) { d.age += dt; d.vy += 420 * dt; d.x += (d.vx - gspd) * dt; d.y += d.vy * dt; }
   sweat = sweat.filter(d => d.y < SKY && d.age < 1.2);
+}
+/* the bird smokes in proportion to how cooked it is: a wisp when warm, a thick dark
+   trail with embers when it is baking. The puffs stay where they were let go (they
+   scroll with the world and ride the wind), so the bird leaves a trail behind it. */
+const TRAIL_COLS = [[170, 150, 138], [80, 62, 56], [34, 26, 24]];
+function stepTrail(dt) {
+  const e = dead ? 0 : heatE();
+  if (e > 0.06 && Math.random() < (8 + 50 * e) * dt) {
+    const c = e < 0.5 ? TRAIL_COLS[0].map((v, i) => v + (TRAIL_COLS[1][i] - v) * e * 2)
+                      : TRAIL_COLS[1].map((v, i) => v + (TRAIL_COLS[2][i] - v) * (e - 0.5) * 2);
+    trail.push({ x: birdX - 7 + Math.random() * 5, y: bird.y - 3 + Math.random() * 5,
+                 r: 1.5 + 2.5 * e, g: 3 + 5 * e, age: 0, life: 0.8 + 1.4 * e,
+                 a: 0.5 + 0.4 * e, col: "rgb(" + c.map(Math.round).join(",") + ")",
+                 ember: e > 0.55 && Math.random() < e - 0.4 });
+  }
+  const u = visU(airU) * 0.6 - gspd;
+  for (const p of trail) { p.age += dt; p.r += p.g * dt; p.x += u * dt; p.y -= (10 + 8 * p.age) * dt; }
+  trail = trail.filter(p => p.age < p.life && p.x > -p.r - 4 && p.y > -p.r - 4);
+  if (trail.length > 120) trail.splice(0, trail.length - 120);
+}
+function drawTrail() {
+  for (const p of trail) {
+    const f = 1 - p.age / p.life;
+    ctx.globalAlpha = p.a * f;
+    disc(p.x, p.y, Math.max(1, Math.round(p.r)), p.col);
+    if (p.ember && p.age < p.life * 0.5) {
+      ctx.globalAlpha = 1 - p.age / (p.life * 0.5);
+      ctx.fillStyle = (p.age * 20 | 0) % 2 ? "#ffb020" : "#ff5a1e";
+      ctx.fillRect(Math.round(p.x), Math.round(p.y + p.r * 0.3), 1, 1);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function stepSand(dt) {
+  if (clearT > 0) {                                    // scoured: the wind strips it back to a skim
+    clearT = Math.max(0, clearT - dt);
+    const k = clearT / SAND.clear;
+    sandD = SAND.start + (clearFrom - SAND.start) * k * k * (3 - 2 * k);
+    for (let i = 0; i < 2; i++) if (Math.random() < 30 * dt) {   // sand blasting off the drifts and heaps
+      const x = Math.random() * W;
+      spawnDust(x, SKY - groundSandH(x) - 1, -60 - Math.random() * 70);
+    }
+    for (const p of pipes) if (p.x > -PIPE_W && p.x < W && Math.random() < 12 * dt)
+      spawnDust(p.x - CAP_X + Math.random() * (PIPE_W + 2 * CAP_X), p.bot - pipeSandH(p) - 1, -50 - Math.random() * 60);
+  } else {
+    sandD = Math.min(SAND.max, sandD + SAND.rate * dustW.k * dt);
+    if (!dead) checkBlocked();
+  }
+  saveT -= dt;
+  if (saveT <= 0) { saveT = 2; saveSand(); }
+}
+function saveSand() { try { localStorage.setItem(SAND_KEY, sandD.toFixed(2)); } catch (e) {} }
+function pipeSandH(p) { return sandD * SAND.pipeK * p.sf; }
+/* the heap on a lip, column i: flat while shallow, then a mound with slumped sides */
+function sandProfile(i) { const d = Math.min(i, SAND_COLS - 1 - i); return Math.min(1, (d + 1) / 4) ** 0.6; }
+function lipCol(h, i) {
+  const d = Math.min(i, SAND_COLS - 1 - i);
+  return Math.min(h * sandProfile(i), 3 + 4 * d + 0.3 * d * d);   // sand slumps a touch flatter than snow
+}
+function gapLeft(p) {                                  // room left between the top lip and the sand below it
+  const heap = p.bot - lipCol(pipeSandH(p), SAND_COLS >> 1);
+  const dune = SKY - groundSandH(p.x + PIPE_W / 2);
+  return Math.min(heap, dune) - p.top;
+}
+function checkBlocked() {                              // a gap sanded shut on screen: scour
+  for (const p of pipes)
+    if (p.x < W - CAP_X && p.x + PIPE_W > 0 && gapLeft(p) < SAND.block) {
+      clearT = SAND.clear; clearFrom = sandD; clears++;
+      return;
+    }
+}
+/* ground sand: dunes fixed to the world (they scroll with the ground), with sand
+   banked against the foot of every bottom pipe, never over its top */
+function noise1(x) { return 0.5 + 0.3 * Math.sin(x * 0.027) + 0.2 * Math.sin(x * 0.071 + 1.3); }
+function groundSandH(x) {
+  const base = sandD * (0.65 + 0.6 * noise1(x + dist));
+  let h = base;
+  for (const p of pipes) {
+    const L = p.x, R = p.x + PIPE_W, top = SKY - p.bot;
+    const wd = 22 + 0.7 * sandD;
+    let d = 0;
+    if (x > L - wd && x < L) d = sandD * 0.8 * (1 - (L - x) / wd) ** 1.5;
+    else if (x >= R && x < R + wd) d = sandD * 0.8 * (1 - (x - R) / wd) ** 1.5;
+    if (d > 0) h = Math.max(h, base + Math.min(d, Math.max(0, top - base)));
+  }
+  return h;
+}
+/* soft sand: it never kills the bird; it plows a groove and kicks up a spray */
+function plowSand() {
+  const bot = bird.y + HH, gTop = SKY - groundSandH(birdX);
+  if (bot > gTop && Math.random() < 0.6) spawnDust(birdX - HW + Math.random() * 2 * HW, gTop - 1, -30 - Math.random() * 40);
+  for (const p of pipes) {
+    const x0 = Math.round(p.x) - CAP_X - 1;
+    if (birdX + HW < x0 || birdX - HW > x0 + SAND_COLS * 2) continue;
+    const B = Math.round(p.bot), h = pipeSandH(p), allow = Math.max(0, B - bot);
+    if (allow >= h) continue;
+    for (let i = 0; i < SAND_COLS; i++) {
+      const cx = x0 + i * 2 + 1;
+      if (cx < birdX - HW || cx > birdX + HW) continue;
+      const hc = lipCol(h, i);
+      if (hc - p.cut[i] > allow) {
+        p.cut[i] = hc - allow;
+        if (Math.random() < 0.5) spawnDust(cx, B - allow - 1, -30 - Math.random() * 50);
+      }
+    }
+  }
 }
 const LIT = [false, false, false], LIT_DY = [-HH + 2, 0, HH - 2];   // head, middle, tail in the sun?
 /* smoke: big soft puffs far off behind the pipes, blowing in from the upwind edge.
@@ -671,7 +796,7 @@ function pipeRects(p) {                              // [x0, y0, x1, y1), as px(
   const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), R0 = PIPE_RECTS;
   R0[0][0] = L;          R0[0][1] = -999;      R0[0][2] = L + PIPE_W;         R0[0][3] = T - CAP_H;  // top shaft
   R0[1][0] = L - CAP_X;  R0[1][1] = T - CAP_H; R0[1][2] = L + PIPE_W + CAP_X; R0[1][3] = T;          // top lip
-  R0[2][0] = L - CAP_X;  R0[2][1] = B;         R0[2][2] = L + PIPE_W + CAP_X; R0[2][3] = B + CAP_H;  // bottom lip
+  R0[2][0] = L - CAP_X;  R0[2][1] = B - Math.round(Math.min(pipeSandH(p), 6)); R0[2][2] = L + PIPE_W + CAP_X; R0[2][3] = B + CAP_H;  // bottom lip
   R0[3][0] = L;          R0[3][1] = B + CAP_H; R0[3][2] = L + PIPE_W;         R0[3][3] = 999;        // bottom shaft
   return R0;
 }
@@ -1189,23 +1314,43 @@ function drawSweat() {
   ctx.fillStyle = "#d6f2ff";
   for (const d of sweat) ctx.fillRect(Math.round(d.x), Math.round(d.y), 1, 2);
 }
-function drawThermo() {                            // 3. a thermometer riding with the bird
-  if (dead || sunMul <= 0) return;
-  const x = Math.round(birdX) - 26, y = Math.round(bird.y) - 13, e = heatE();
-  const col = e > 0.6 ? "#ff3b1e" : e > 0.3 ? "#ff8a2a" : "#ffd040";
-  ctx.fillStyle = C.ink;
-  ctx.fillRect(x - 1, y - 1, 5, 21); ctx.fillRect(x - 2, y + 18, 7, 7);
-  ctx.fillStyle = "#fff6e0"; ctx.fillRect(x, y, 3, 19);
-  const h = Math.round(18 * Math.min(1, e + 0.06));
-  ctx.fillStyle = col; ctx.fillRect(x, y + 19 - h, 3, h); ctx.fillRect(x - 1, y + 19, 5, 5);
-  // heating up or cooling down: a little arrow beside it
-  const up = shadeK < 0.5, c = up ? "#ff6b2a" : "#7fd6ff", ax = x + 6, ay = y + 3;
-  if (!up && skin < 0.02) return;
-  ctx.fillStyle = C.ink;
-  ctx.fillRect(ax - 1, ay - 1, 5, 7);
-  ctx.fillStyle = c;
-  if (up) { ctx.fillRect(ax + 1, ay, 1, 5); ctx.fillRect(ax, ay + 1, 3, 1); }
-  else    { ctx.fillRect(ax + 1, ay, 1, 5); ctx.fillRect(ax, ay + 3, 3, 1); }
+function pipeSand(p) {                             // the heap on a bottom lip, plowed where the bird went
+  const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), h = pipeSandH(p), x0 = L - CAP_X - 1;
+  for (let i = 0; i < SAND_COLS; i++) {
+    const hc = Math.round(lipCol(h, i) - p.cut[i]);
+    if (hc <= 0) continue;
+    ctx.fillStyle = C.duneEdge; ctx.fillRect(x0 + i * 2, B - 1, 2, 1);
+    ctx.fillStyle = C.duneShade; ctx.fillRect(x0 + i * 2, B - hc, 2, hc - 1);
+    const lit = i < SAND_COLS * 0.6 ? Math.ceil(hc * 0.75) : Math.ceil(Math.min(hc * 0.5, 3 + hc * 0.15));
+    ctx.fillStyle = C.dune; ctx.fillRect(x0 + i * 2, B - hc, 2, Math.max(1, lit));
+    if (hc > 4 && (i * 7 + B) % 5 === 0) { ctx.fillStyle = C.duneShade; ctx.fillRect(x0 + i * 2, B - hc + 3, 2, 1); }   // ripples
+  }
+  const hl = Math.min(SAND.ledgeMax, Math.round(h * 0.3));
+  if (hl > 0) {                                     // a skim on the ledges of the top lip
+    ctx.fillStyle = C.dune;
+    ctx.fillRect(L - CAP_X, T - CAP_H - hl, CAP_X, hl);
+    ctx.fillRect(L + PIPE_W, T - CAP_H - hl, CAP_X, hl);
+  }
+}
+function groundSand() {                            // dunes, 2 px columns, run-length merged
+  let run = -1, runH = 0;
+  const off = Math.round(dist);
+  const flush = (x1) => {
+    if (run < 0 || runH <= 0) return;
+    const w = x1 - run;
+    ctx.fillStyle = C.duneShade; ctx.fillRect(run, SKY - runH, w, runH);
+    ctx.fillStyle = C.dune; ctx.fillRect(run, SKY - runH, w, Math.max(1, Math.ceil(runH * 0.45) + 1));
+    if (runH > 8) {                                 // wind ripples across the dune face
+      ctx.fillStyle = C.duneShade;
+      for (let y = SKY - runH + 5; y < SKY - 2; y += 7)
+        for (let x = run; x < x1; x += 2) if (((x + off) >> 1) % 6 === ((y >> 1) % 6)) ctx.fillRect(x, y, 2, 1);
+    }
+  };
+  for (let x = 0; x < W; x += 2) {
+    const h = Math.round(groundSandH(x + 1));
+    if (h !== runH || run < 0) { flush(x); run = x; runH = h; }
+  }
+  flush(W);
 }
 function drawHeatHud() {                           // 4. and spelled out in the corner
   if (sunMul <= 0) { txt("SUN OFF", W - 8, 52, "rgba(255,255,255,.9)", F.hud, "right"); return; }
@@ -1301,10 +1446,12 @@ function draw() {
   skyline();
   haze();
   drawCacti();
+  groundSand();                                  // over the foot of the cacti, under the shade
   drawShadows();
   for (const p of pipes) {
     pipePart(p.x, 0, p.top, true);
     pipePart(p.x, p.bot, SKY, false);
+    pipeSand(p);
   }
   ground();
   groundShadows();
@@ -1314,16 +1461,18 @@ function draw() {
     ctx.fillStyle = "rgba(127,232,255,.28)";
     ctx.fillRect(birdX - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
   }
+  drawTrail();
   drawSunRays();
   drawBirdAura();
   drawSweat();
   drawBird();
-  drawThermo();
   drawDustLeaves(true);                          // the near leaves pass in front of the bird
   drawBolts();
   drawFeathers();
 
   outlineText(String(score), W / 2, 78, "#ffffff", F.big);
+  if (clearT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap sanded shut: the wind scours it all away
+    outlineText("BLOWN CLEAR", W / 2, 120, "#ffe0a0", F.hud);
   txt("BEST " + best, 8, 16, "rgba(255,255,255,.9)", F.hud, "left");
   txt("SPD " + Math.round(speed) + " GAP " + Math.round(gap), W - 8, 16,
       "rgba(255,255,255,.9)", F.hud, "right");

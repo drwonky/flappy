@@ -36,7 +36,15 @@
   #windctl{flex:none;display:flex;align-items:center;gap:10px;width:min(400px,100%);
     text-transform:uppercase;color:#e6edf3;user-select:none;-webkit-user-select:none}
   #windctl label{flex:none}
-  #windval{flex:none;min-width:15ch;text-align:right;white-space:nowrap}
+  #windval{flex:none;min-width:11ch;text-align:right;white-space:nowrap}
+  /* DISCO: 60 s of every season at once, at x20 */
+  #disco{flex:none;font:inherit;text-transform:uppercase;letter-spacing:0;cursor:pointer;
+    padding:6px 8px;min-width:7ch;color:#ffe9ff;background:#3a1f4a;border:0;border-radius:0;
+    box-shadow:inset 0 0 0 2px #000,inset -3px -3px 0 #24102e;-webkit-tap-highlight-color:transparent}
+  #disco:focus{outline:none}
+  #disco:focus-visible{outline:2px solid #7fe8ff;outline-offset:2px}
+  #disco.on{color:#000;animation:disco 0.8s steps(4) infinite}
+  @keyframes disco{0%{background:#ff4fd8}25%{background:#ffe14a}50%{background:#4fe8ff}75%{background:#8aff5a}}
   #windval.storm{color:#ffb347} #windval.hurricane{color:#ff6b5b} #windval.off{color:#7d8a94}
   #wind{flex:1 1 auto;min-width:0;margin:0;height:36px;background:transparent;cursor:pointer;
     -webkit-appearance:none;appearance:none;touch-action:none;-webkit-tap-highlight-color:transparent}
@@ -55,8 +63,9 @@
 <body>
 <div id="stage"><canvas id="game"></canvas></div>
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
-  aria-valuetext="x1"><output id="windval" for="wind">x1</output></div>
-<div id="hud">seasons r4</div>
+  aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
+  aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
+<div id="hud">seasons r5</div>
 
 <script>
 "use strict";
@@ -199,6 +208,17 @@ const ICE = {
 const RAIN = { every: [8, 20], dur: [5, 11], rate: 420, speed: 330, max: 650 };
 let rain = [], splashes = [], rainK = 0, bow = 0;
 const shower = { t: 0, next: 5 };
+/* THUNDERSTORM - summer breaks in one: it builds over the last of the summer and
+   passes early in the autumn. The sky goes dark, the rain comes down hard enough to
+   stand in pools on the ground, and the lightning walks in from the far horizon
+   (behind the far hills), to the near hills, to right here - where every strike
+   whites out the screen, and now and then one finds the bird. */
+const TSTORM = { dur: 22, rain: 2.2, zapP: 0.012, fill: 1.1, waterMax: 16, drain: 0.45, dark: 0.55 };
+const ts = { on: false, p: 0, I: 0, D: 1, next: 0, flash: 0, sky: 0 };
+let strikes = [], waterD = 0, struck = false;
+/* DISCO - the button: every season, fast, at x20, for 60 s */
+const DISCO = { dur: 60, env: 20, len: 6, fade: 2.5 };
+let disco = null;
 const SKYEV = { every: [15, 40], cloud: [0.25, 0.5], cloudDur: [4, 12], blazeP: 0.2, blaze: 1.3, blazeDur: [3, 6], tau: 1.2 };
 let sunMul = qnum("env") !== null && qnum("env") >= 0 ? qnum("env") : 1;   // the ENV setting
 function sunK() { return sunMul <= 0 ? 0 : sunMul <= 1 ? sunMul : Math.pow(sunMul, 0.3); }   // x20 bakes ~2.5x as hard as x1
@@ -381,6 +401,7 @@ function reset() {
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; heatFx();
+  struck = false;
   ramp(0); gspd = speed;
   firstPipes();
 }
@@ -414,6 +435,7 @@ function wantFlap(n) {
 function step(dt) {
   flash = Math.max(0, flash - dt * 3);
   airClock += dt;
+  stepDisco(dt);
   stepSeason(dt);                  // the seasons turn through the crash too
   setWindMul(envWind() * windX * SFX.wind);
   if (windMul > 0) stepWind(dt);   // the wind keeps blowing through the crash
@@ -421,7 +443,7 @@ function step(dt) {
   if (dead) {
     gspd = 0;                      // ...but the world no longer scrolls
     cloudX += -airU * 0.3 * dt;
-    stepSmoke(dt); stepCover(dt); stepTrail(dt); stepRain(dt);
+    stepSmoke(dt); stepCover(dt); stepTrail(dt); stepRain(dt); stepStorm(dt);
     stepAir(dt); stepFeathers(dt); stepDeath(dt); return;
   }
   stepFeathers(dt);
@@ -450,6 +472,7 @@ function step(dt) {
   stepSmoke(dt);
   stepCover(dt);
   stepRain(dt);
+  stepStorm(dt);
 
   // what the bird feels: capped lift/sink plus a zero-mean wobble in gusts and at column edges
   windAt(birdX, bird.y);
@@ -633,17 +656,19 @@ function stepRain(dt) {
     shower.t = randIn(RAIN.dur);
     skyEv.target = randIn([0.3, 0.5]); skyEv.t = shower.t + 1.5; skyEv.dir = sgn();   // a rain cloud over the sun
   }
-  rainK += ((shower.t > 0 ? Math.min(1, spr * 1.5) : 0) - rainK) * (1 - Math.exp(-dt / 1.5));
+  const rGoal = Math.max(shower.t > 0 ? Math.min(1, spr * 1.5) : 0, TSTORM.rain * ts.I);   // a shower, or the storm
+  rainK += (rGoal - rainK) * (1 - Math.exp(-dt / 1.5));
   bow = Math.max(0, bow - dt);
   const flow = (visU(airU) - gspd) * 0.8;
   let n = rainK * RAIN.rate * dt;                     // drops only come in from above the screen, upwind enough
   const lead = Math.max(0, -flow) * SKY / RAIN.speed, trail = Math.max(0, flow) * SKY / RAIN.speed;
-  for (; n > 0; n--) if (Math.random() < n && rain.length < RAIN.max)
+  for (; n > 0; n--) if (Math.random() < n && rain.length < RAIN.max * (1 + ts.I))
     rain.push({ x: -trail - 4 + Math.random() * (W + lead + trail + 8), y: -6 - Math.random() * 20, vy: RAIN.speed + Math.random() * 60 });
   for (const d of rain) {
     d.x += flow * dt; d.y += d.vy * dt; d.sl = flow / d.vy;
     const X = Math.round(d.x), Y = Math.round(d.y);
-    if (Y >= SKY - groundCoverH(d.x)) { d.dead = 1; splash(X, Math.round(SKY - groundCoverH(d.x)) - 1, groundSplash()); continue; }
+    const gh = groundCoverH(d.x), sh = Math.max(gh, waterD);          // the ground, or the water standing on it
+    if (Y >= SKY - sh) { d.dead = 1; splash(X, Math.round(SKY - sh) - 1, waterD > gh ? "rgba(200,225,255,.9)" : groundSplash()); continue; }
     for (const p of pipes) {                          // the pipes are solid: it splashes where it hits
       if (X < p.x - CAP_X - 2 || X > p.x + PIPE_W + CAP_X + 2) continue;
       pipeRects(p);
@@ -653,6 +678,88 @@ function stepRain(dt) {
   rain = rain.filter(d => !d.dead && d.x > -80 && d.x < W + 80);
   for (const q of splashes) { q.age += dt; q.x -= gspd * dt; }
   splashes = splashes.filter(q => q.age < 0.18);
+}
+function stormWindow() {                          // [start, length] on the season clock: over the summer/autumn turn
+  const d = Math.min(TSTORM.dur, SEASON.len * 0.75);
+  return [2 * SEASON.len - SEASON.fade - d * 0.45, d];
+}
+const smooth = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+function stepStorm(dt) {
+  const [s0, d] = stormWindow(), p = (seasonT - s0) / d;
+  ts.on = p >= 0 && p < 1; ts.p = ts.on ? p : 0;
+  const goal = ts.on ? smooth(Math.min(p / 0.15, (1 - p) / 0.12)) : 0;
+  ts.I += (goal - ts.I) * (1 - Math.exp(-dt / 0.8));
+  ts.D = ts.on ? 1 - smooth((p - 0.08) / 0.55) : 1;    // how far off the lightning is: 1 the horizon, 0 overhead
+  if (ts.I > 0.2) { skyEv.target = 0.22; skyEv.t = Math.max(skyEv.t, 1.5); skyEv.dir = skyEv.dir || 1; }   // no sun in a storm
+  ts.flash = Math.max(0, ts.flash - dt * 5); ts.sky = Math.max(0, ts.sky - dt * 4);
+  if (ts.on && p > 0.05 && p < 0.9 && (ts.next -= dt) <= 0) {
+    const r = ts.D + (Math.random() - 0.5) * 0.3;
+    const layer = r > 0.6 ? 0 : r > 0.22 ? 1 : 2;
+    ts.next = randIn(layer === 2 ? [0.6, 1.5] : [0.35, 1.2]);   // near strikes are spaced out: never 3 flashes a second
+    strike(layer);
+  }
+  for (const s of strikes) {
+    s.age += dt;
+    s.ox -= gspd * [0.06, 0.14, 1][s.layer] * dt;     // they stay put in their layer as the world scrolls past
+    if (!s.re2 && s.age > 0.13) { s.re2 = true; if (s.layer === 2) ts.flash = Math.max(ts.flash, 0.55); else ts.sky = Math.max(ts.sky, 0.5 * s.fl); }
+  }
+  strikes = strikes.filter(s => s.age < 0.45);
+  // heavy rain stands on the ground; it soaks away (and the sun dries it) once it eases off
+  waterD += TSTORM.fill * Math.max(0, rainK - 0.6) * dt;
+  waterD -= (TSTORM.drain + 0.8 * SFX.sun * skyEv.k) * Math.max(0, 1 - rainK) * dt;
+  waterD = Math.max(0, Math.min(TSTORM.waterMax, waterD));
+}
+function boltPath(x0, y0, x1, y1, jag) {           // a jagged run from the cloud down to where it lands
+  const pts = [[x0, y0]], n = Math.max(3, Math.round((y1 - y0) / 13));
+  for (let i = 1; i < n; i++) {
+    const f = i / n;
+    pts.push([x0 + (x1 - x0) * f + (Math.random() * 2 - 1) * jag, y0 + (y1 - y0) * f + (Math.random() * 2 - 1) * 3]);
+  }
+  pts.push([x1, y1]);
+  return pts;
+}
+function strike(layer) {
+  const L = [{ y0: [SKY - 190, SKY - 130], y1: [SKY - 34, SKY - 26], jag: 4, fl: 0.25 },   // far: low on the horizon, behind the far hills
+             { y0: [8, 40], y1: [SKY - 16, SKY - 12], jag: 9, fl: 0.6 },       // mid: onto the near hills
+             { y0: [-6, -4], y1: [0, 0], jag: 13, fl: 1 }][layer];             // near: right here
+  let x1 = 10 + Math.random() * (W - 20), y1 = randIn(L.y1);
+  const zap = layer === 2 && !dead && Math.random() < TSTORM.zapP;
+  if (layer === 2) y1 = SKY - Math.max(groundCoverH(x1), waterD);
+  if (zap) { x1 = birdX; y1 = bird.y; }
+  const x0 = x1 + (Math.random() * 2 - 1) * 40;
+  const main = boltPath(x0, randIn(L.y0), x1, y1, L.jag), branches = [];
+  const nb = 1 + ((Math.random() * (layer + 2)) | 0);
+  for (let b = 0; b < nb; b++) {                    // forks that die out in mid air
+    let [x, y] = main[1 + ((Math.random() * (main.length - 2)) | 0)];
+    const sd = sgn(), br = [[x, y]];
+    for (let i = 0, n = 2 + ((Math.random() * 3) | 0); i < n; i++) {
+      x += sd * (4 + Math.random() * 8) * (0.6 + layer * 0.3); y += (5 + Math.random() * 9) * (0.6 + layer * 0.3);
+      br.push([x, y]);
+    }
+    branches.push(br);
+  }
+  strikes.push({ layer: layer, ox: 0, age: 0, main: main, br: branches, fl: L.fl, re2: false });
+  if (layer === 2) {
+    ts.flash = 1;                                    // the whole screen goes white
+    for (let i = 0; i < 10; i++) spawnDust(x1 + (Math.random() * 2 - 1) * 6, y1 - 1, -60 - Math.random() * 90, Math.random() < 0.5 ? "#fff6c0" : "#ffffff");
+    if (zap) { struck = true; die(); }               // ...and this one found the bird
+  } else ts.sky = Math.max(ts.sky, L.fl);
+}
+function stepDisco(dt) { if (disco && (disco.t -= dt) <= 0) endDisco(); }
+function setSeasonLen(len, fade) {                 // same point in the year, a different pace
+  seasonT = seasonT / SEASON.len * len; SEASON.len = len; SEASON.fade = fade;
+}
+function startDisco() {
+  disco = { t: DISCO.dur, env0: sunMul, len0: SEASON.len, fade0: SEASON.fade };
+  setSeasonLen(DISCO.len, DISCO.fade);
+  sunMul = DISCO.env;
+  syncControls();
+}
+function endDisco() {
+  const d = disco; disco = null;
+  setSeasonLen(d.len0, d.fade0);
+  sunMul = d.env0;
+  syncControls();
 }
 function splash(x, y, col) { if (splashes.length < 200) splashes.push({ x: x, y: y, age: 0, col: col }); }
 function groundSplash() {                          // what the drop throws up: mud off bare sand, glitter off ice
@@ -836,7 +943,7 @@ function stepCover(dt) {
       snowD = Math.max(0, snowD - COVER.rainMelt * r);
       iceD = Math.max(0, iceD - COVER.rainMelt * COVER.iceMelt * 0.3 * r);
       const bare = Math.max(0, 1 - (snowD + iceD) / 4);                   // snow and ice keep the rain off the sand
-      sandD = Math.max(0, sandD - COVER.wash * bare * r);
+      sandD = Math.max(0, sandD - COVER.wash * bare * Math.min(1.2, rainK) * dt);   // a cloudburst runs off: it can only wash so fast
     }
     if (iceD > 0 && m > 0) iceD = Math.max(0, iceD - m * COVER.iceMelt);  // the sun gets the crust too, slowly
     sandD = Math.min(SAND.max, sandD); snowD = Math.min(SAND.max, snowD); iceD = Math.min(SAND.max, iceD);
@@ -847,7 +954,7 @@ function stepCover(dt) {
 }
 function coverCol() { const r = Math.random() * (sandD + snowD); return r < snowD ? "#ffffff" : C.sand; }   // what the wind is lifting
 function saveWorld() {
-  try { localStorage.setItem(SEASON_KEY, JSON.stringify({ t: +seasonT.toFixed(1), sand: +sandD.toFixed(2), snow: +snowD.toFixed(2), ice: +iceD.toFixed(2) })); } catch (e) {}
+  try { localStorage.setItem(SEASON_KEY, JSON.stringify({ t: +(disco ? seasonT / SEASON.len * disco.len0 : seasonT).toFixed(1), sand: +sandD.toFixed(2), snow: +snowD.toFixed(2), ice: +iceD.toFixed(2) })); } catch (e) {}
 }
 function pipeCoverH(p) { return coverD() * p.sf; }
 /* the heap on a lip, column i: flat while shallow, then a mound with slumped sides */
@@ -1410,7 +1517,7 @@ function drawSmoke() {                             // stacked blocks, each a lit
 }
 function haze() {                                  // dust in the distance, thicker in a dust storm
   ctx.fillStyle = "#d89a58";
-  ctx.globalAlpha = (0.06 + 0.10 * dustW.k) * SFX.desert;
+  ctx.globalAlpha = (0.06 + 0.10 * dustW.k) * SFX.desert * (1 - ts.I);   // the storm lays the dust
   if (ctx.globalAlpha < 0.005) { ctx.globalAlpha = 1; return; }
   ctx.fillRect(0, 0, W, SKY);
   ctx.globalAlpha = 1;
@@ -1529,24 +1636,62 @@ function drawRain() {                              // behind the pipes (they are
   }
   for (const q of splashes) { ctx.fillStyle = q.col || "rgba(220,238,255,.8)"; const e = Math.round(q.age * 20); ctx.fillRect(Math.round(q.x) - 1 - e, Math.round(q.y) - e, 1, 1); ctx.fillRect(Math.round(q.x) + 1 + e, Math.round(q.y) - e, 1, 1); }
 }
+function drawStrikes(layer) {                     // glow, then the white-hot core; forks thinner
+  for (const s of strikes) {
+    if (s.layer !== layer) continue;
+    const a = s.age;
+    if (!(a < 0.07 || (a > 0.12 && a < 0.19) || (a > 0.27 && a < 0.32))) continue;   // it flickers: stroke, re-strike
+    const g = [2, 3, 5][layer], c = [1, 1, 2][layer], ox = Math.round(s.ox);
+    const run = (pts, w, col) => { for (let i = 1; i < pts.length; i++)
+      boltLine(Math.round(pts[i - 1][0]) + ox, Math.round(pts[i - 1][1]), Math.round(pts[i][0]) + ox, Math.round(pts[i][1]), w, col); };
+    ctx.globalAlpha = layer === 0 ? 0.30 : 0.45;
+    run(s.main, g, "#9fb4ff"); for (const b of s.br) run(b, Math.max(1, g - 2), "#9fb4ff");
+    ctx.globalAlpha = layer === 0 ? 0.75 : 1;
+    run(s.main, c, "#ffffff"); for (const b of s.br) run(b, 1, layer === 0 ? "#dfe6ff" : "#ffffff");
+  }
+  ctx.globalAlpha = 1;
+}
+function stormSky() {                               // the dark of the storm over the sky and hills, lit up by the far strikes
+  if (ts.I < 0.01 && ts.sky <= 0) return;
+  ctx.fillStyle = "rgba(14,18,42," + (TSTORM.dark * ts.I).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY);
+  if (ts.sky > 0) { ctx.fillStyle = "rgba(210,220,255," + (0.45 * ts.sky).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY); }
+}
+function stormLow() {                               // ...and over the pipes and the ground, which the sky layer missed
+  if (ts.I < 0.01) return;
+  ctx.fillStyle = "rgba(16,20,38," + (0.7 * TSTORM.dark * ts.I).toFixed(3) + ")";
+  ctx.fillRect(0, SKY, W, GROUND);
+  for (const p of pipes) for (const q of pipeRects(p))
+    ctx.fillRect(q[0], Math.max(0, q[1]), q[2] - q[0], Math.min(SKY, q[3]) - Math.max(0, q[1]));
+}
+function drawWater() {                             // standing water: fills the hollows between the drifts
+  if (waterD < 0.5) return;
+  const lv = Math.round(SKY - waterD), sh = (Math.round(dist * 0.5) + (airClock * 6 | 0));
+  for (let x = 0; x < W; x += 2) {
+    const g = Math.round(SKY - groundCoverH(x + 1));
+    if (g <= lv) continue;
+    ctx.fillStyle = "rgba(52,86,124,.55)"; ctx.fillRect(x, lv, 2, g - lv);
+    if (((x + sh) % 12) < 7) { ctx.fillStyle = "rgba(190,220,250,.75)"; ctx.fillRect(x, lv, 2, 1); }   // the surface, rippling
+  }
+}
 function skyline() {                              // green hills (snow-capped in winter); mesas in summer
   const m = SW[1], cap = Math.min(14, Math.round(snowD * 0.25));
+  const dk = TSTORM.dark * ts.I, hd = dk > 0.01 ? mixHex(C.hillDark, "#10142a", dk) : C.hillDark, hl = dk > 0.01 ? mixHex(C.hill, "#10142a", dk) : C.hill;
   if (m < 1) {
     ctx.globalAlpha = 1 - m;
     for (let i = 0; i < 8; i++) {
       const x = Math.round((((i * 46) - dist * 0.06) % (W + 70) + W + 70) % (W + 70) - 35);
-      ctx.fillStyle = C.hillDark; ctx.fillRect(x, SKY - 26, 34, 26);
+      ctx.fillStyle = hd; ctx.fillRect(x, SKY - 26, 34, 26);
       if (cap > 0) { ctx.fillStyle = "#d3e0ec"; ctx.fillRect(x, SKY - 26, 34, cap); ctx.fillRect(x + 3, SKY - 26 + cap, 6, 2); }
     }
     for (let i = 0; i < 9; i++) {
       const x = Math.round((((i * 40) - dist * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
-      ctx.fillStyle = C.hill; ctx.fillRect(x, SKY - 14, 30, 14); ctx.fillRect(x + 4, SKY - 18, 22, 4);
+      ctx.fillStyle = hl; ctx.fillRect(x, SKY - 14, 30, 14); ctx.fillRect(x + 4, SKY - 18, 22, 4);
       if (cap > 0) { ctx.fillStyle = "#f4f8fc"; ctx.fillRect(x + 4, SKY - 18, 22, cap); ctx.fillRect(x, SKY - 14, 4, cap); ctx.fillRect(x + 26, SKY - 14, 4, cap); }
     }
   }
   if (m > 0) {
     ctx.globalAlpha = m;
-    ctx.fillStyle = C.hillDark;
+    ctx.fillStyle = hd;
     for (let i = 0; i < 5; i++) {
       const x = Math.round((((i * 74) - dist * 0.05) % (W + 110) + W + 110) % (W + 110) - 55);
       const h = 30 + (i * 13) % 22;
@@ -1554,7 +1699,7 @@ function skyline() {                              // green hills (snow-capped in
       ctx.fillRect(x - 6, SKY - h + 8, 64, h - 8);
       ctx.fillRect(x - 12, SKY - h + 18, 76, h - 18);
     }
-    ctx.fillStyle = C.hill;
+    ctx.fillStyle = hl;
     for (let i = 0; i < 7; i++) {
       const x = Math.round((((i * 52) - dist * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
       ctx.fillRect(x, SKY - 10, 44, 10);
@@ -1820,18 +1965,18 @@ function drawHeatHud() {                           // heat (or ice), spelled out
     txt("BIRD " + Math.round(104 + 16 * e) + "F", W - 8, 52, tcol, F.hud, "right");
     ctx.fillStyle = "#c0301a"; ctx.fillRect(bx, by, Math.round(bw * core), 5);
     ctx.fillStyle = "#ffb03a"; ctx.fillRect(bx + Math.round(bw * core), by, Math.round(bw * Math.min(0.6 * skin, 1 - core)), 5);
-    const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : SFX.heat < 0.5 ? "WARM SUN" : "IN THE SUN";
+    const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : cloudCover() > 0.6 ? "SUN HIDDEN" : SFX.heat < 0.5 ? "WARM SUN" : "IN THE SUN";
     txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
   }
   const wc = windCool(), c = cloudCover(), b = blazeK();
-  const air = rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
+  const air = ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
             : wc < 0.6 ? ["STILL AIR", "#ffc070"] : wc > 1.4 ? ["STRONG BREEZE", "#9fe0ff"] : ["BREEZE", "#cfe8f0"];
   txt(air[0], W - 8, 96, air[1], F.hud, "right");
   const fx = Math.round(100 * (1 - flapEff / FLAP));
   if (fx >= 1) txt("FLAP -" + fx + "%", W - 8, 114, fx > 20 ? "#ff8a5a" : "rgba(255,255,255,.8)", F.hud, "right");
 }
 function drawSeasonHud() {                         // on the ground: SUMMER, or SUMMER > AUTUMN while it turns
-  const y = SKY + 46, a = SEASON_NAMES[seasonI];
+  const y = SKY + (disco ? 36 : 46), a = SEASON_NAMES[seasonI];
   const put = (t, x, col) => { txt(t, x + 1, y + 1, "rgba(0,0,0,.45)", F.hud, "left"); txt(t, x, y, col, F.hud, "left"); };
   put(a, 8, SEASON_COLS[seasonI]);
   if (seasonF > 0.02) {
@@ -1841,6 +1986,11 @@ function drawSeasonHud() {                         // on the ground: SUMMER, or 
     ctx.globalAlpha = 0.35 + 0.65 * seasonF;
     put(SEASON_NAMES[seasonNext], x + Math.round(ctx.measureText("> ").width), SEASON_COLS[seasonNext]);
     ctx.globalAlpha = 1;
+  }
+  if (disco) {                                       // and under it, the party clock
+    const t = "DISCO " + Math.ceil(disco.t) + "  X" + DISCO.env;
+    txt(t, 9, y + 21, "rgba(0,0,0,.45)", F.hud, "left");
+    txt(t, 8, y + 20, ["#ff4fd8", "#ffe14a", "#4fe8ff", "#8aff5a"][(airClock * 5 | 0) % 4], F.hud, "left");
   }
 }
 
@@ -1923,9 +2073,12 @@ function draw() {
   clouds();
   drawSmoke();                                   // far away, behind everything solid
   drawRainbow();
+  stormSky();                                    // the storm's dark sky, lit up by the flashes...
+  drawStrikes(0);                                // ...far lightning, behind the far hills, which stand out against it
   skyline();
   haze();
   skyLight();
+  drawStrikes(1);                                // nearer: in front of the hills, behind the pipes
   drawCacti();
   drawFlowers();
   groundSand();                                  // over the foot of the cacti and flowers, under the shade
@@ -1936,7 +2089,9 @@ function draw() {
     pipePart(p.x, p.bot, SKY, false);
     pipeSand(p);
   }
+  drawWater();
   ground();
+  stormLow();
   groundShadows();
   drawStreaksSwirls();                           // in FRONT of the pipes: the pipes are solid, so
   drawDustLeaves(false);                         // nothing is ever on top of one to need hiding
@@ -1951,6 +2106,8 @@ function draw() {
   drawDustLeaves(true);                          // the near leaves pass in front of the bird
   drawBolts();
   drawFeathers();
+  drawStrikes(2);                                // overhead: in front of everything
+  if (ts.flash > 0) { ctx.fillStyle = "rgba(240,244,255," + (0.8 * ts.flash).toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
 
   outlineText(String(score), W / 2, 78, "#ffffff", F.big);
   if (clearT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap sanded shut: the wind scours it all away
@@ -1981,7 +2138,7 @@ function draw() {
     ctx.fillStyle = "rgba(20,32,15,.92)";
     ctx.fillRect(W / 2 - 76, H / 2 - 40, 152, 80);
     txt("CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
-    txt("score " + score, W / 2, H / 2 + 8, "#9fb0bd", F.hud, "center");
+    txt(struck ? "struck by lightning" : "score " + score, W / 2, H / 2 + 8, struck ? "#cfd8ff" : "#9fb0bd", F.hud, "center");
     txt("restarting...", W / 2, H / 2 + 26, "#9fb0bd", F.hud, "center");
   }
 
@@ -2020,8 +2177,17 @@ function showWind() {
   windOut.className = sunMul <= 0 ? "off" : sunMul >= 20 ? "hurricane" : sunMul > 2 ? "storm" : "";
   windIn.setAttribute("aria-valuetext", s);
 }
+const discoBtn = document.getElementById("disco");
+function syncControls() {                          // after disco starts or ends
+  windIn.value = String(windToSlider(sunMul));
+  showWind();
+  discoBtn.className = disco ? "on" : "";
+  discoBtn.setAttribute("aria-pressed", disco ? "true" : "false");
+}
+discoBtn.addEventListener("click", () => { if (disco) endDisco(); else startDisco(); });
 function changeWind(v) {
-  if (v === sunMul) return;
+  if (disco) { disco.env0 = v; endDisco(); }       // touching the slider ends the party, at the new setting
+  else if (v === sunMul) return;
   sunMul = v;
   showWind();
   try {                                          // a reload keeps the setting

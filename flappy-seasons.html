@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r9</div>
+<div id="hud">seasons r10</div>
 
 <script>
 "use strict";
@@ -614,7 +614,7 @@ function makeBolts() {
 function stepDeath(dt) {
   deadT += dt;
   if (grabbed) {                                // carried off in the talons, struggling
-    if (hawk) { birdX = hawk.x; bird.y = hawk.y + 14; frameIdx = ((deadT * 14) | 0) % 4; }
+    if (hawk) { birdX = hawk.x; bird.y = hawk.y + hawkHold(hawkQ(hawk)); frameIdx = ((deadT * 14) | 0) % 4; }
     else { offT += dt; if (offT > D_REST) reset(); }
     return;
   }
@@ -2465,7 +2465,11 @@ function drawGophers() {                            // after the ground, before 
 
 /* ---------- the hawk: in fine weather it circles high, and now and then stoops.
    Mostly it pulls out of the dive short of the bird; once in a while it does not. ---------- */
-const HAWK = { grabP: 0.03, speed: 250, passes: [1, 3] };
+const HAWK = { grabP: 0.03, speed: 250, passes: [1, 3],
+               far: 2, feint: 4, prey: 4, near: 5 };   // its pixel size: circling high, at a near miss, at the ground, on the bird
+function hawkQ(h) { return Math.max(1, Math.round(h.s * 2) / 2); }   // drawn in half-pixel steps
+const hawkHold = s => 4 * s + 6;                    // talons to the middle of the bird it holds
+const hawkPick = s => 4 * s + 2;                    // ... and of a groundhog or a gopher
 let hawk = null, grabbed = false;
 const HAWK_UP = ["....DD........", "....DDD.......", ".....DDD......", ".....DDDD.....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "....LLLLL.BB..", "..............", ".............."];
 const HAWK_DN = ["..............", "..............", "..............", "..............", "TTBBBBBBBBBBB.", ".TTBBDDDDLBEBY", ".....DDDD.BB..", "....DDD.......", "...DD........."];
@@ -2476,7 +2480,7 @@ function fineWeather() { return ts.I < 0.02 && rainK < 0.15 && cloudCover() < 0.
 function makeHawk() {
   const side = sgn(), cx = 140 + Math.random() * 80, cy = 50 + Math.random() * 40;
   return { st: "in", x: side > 0 ? W + 30 : -30, y: cy - 30, cx, cy, a: side > 0 ? 0 : Math.PI, R: 40 + Math.random() * 25,
-           t: 0, next: 3 + Math.random() * 3, passes: Math.round(randIn(HAWK.passes)), vx: 0, vy: 0, u: 0 };
+           t: 0, next: 3 + Math.random() * 3, passes: Math.round(randIn(HAWK.passes)), vx: 0, vy: 0, u: 0, s: HAWK.far };
 }
 function hawkRing(h) { return [h.cx + h.R * Math.cos(h.a), h.cy + 0.35 * h.R * Math.sin(h.a)]; }
 function hawkToward(h, x, y, v, dt) {               // fly straight at a point; true once there
@@ -2487,7 +2491,7 @@ function hawkToward(h, x, y, v, dt) {               // fly straight at a point; 
 function startStoop(h) {
   h.st = "stoop"; h.u = 0; h.P0 = [h.x, h.y];
   h.grab = Math.random() < HAWK.grabP;
-  if (h.grab) { h.P1 = [birdX, bird.y - 10]; h.P2 = [birdX - 170, 30]; }
+  if (h.grab) { h.P1 = [birdX, bird.y - hawkHold(HAWK.near)]; h.P2 = [birdX - 170, 30]; }
   else {                                          // a feint: down at the bird, then it breaks off up and away
     h.P1 = [birdX + 50 + Math.random() * 35, Math.max(24, bird.y - 12 - Math.random() * 40)];
     h.P2 = [h.P1[0] + 50 + Math.random() * 40, Math.max(10, h.P1[1] - 110)];
@@ -2515,7 +2519,7 @@ function stoopAt(h, prey) {
   if (prey.kind === "hog") { hog.prey = true; hog.sunny = false; hog.dur = 99; } else prey.g.prey = true;
   const q = preyXY(prey);
   h.st = "stoop"; h.u = 0; h.P0 = [h.x, h.y]; h.grab = false; h.prey = prey;
-  h.P1 = [q[0], q[1] - 10]; h.P2 = [q[0] - 140, 40];
+  h.P1 = [q[0], q[1] - hawkPick(HAWK.prey)]; h.P2 = [q[0] - 140, 40];
   const L = Math.hypot(h.P1[0] - h.P0[0], h.P1[1] - h.P0[1]) + Math.hypot(h.P2[0] - h.P1[0], h.P2[1] - h.P1[1]);
   h.T = Math.max(1.0, L / 330);
 }
@@ -2540,20 +2544,23 @@ function stepHawk(dt) {
       else h.next = 2;
     }
   } else if (h.st === "stoop") {
-    if (h.prey && h.u < 0.5) { const q = preyXY(h.prey); if (q) h.P1 = [q[0], q[1] - 10]; }
-    else if (h.grab && h.u < 0.5 && !dead) h.P1 = [birdX, bird.y - 10];   // it follows the bird down
+    if (h.prey && h.u < 0.5) { const q = preyXY(h.prey); if (q) h.P1 = [q[0], q[1] - hawkPick(HAWK.prey)]; }
+    else if (h.grab && h.u < 0.5 && !dead) h.P1 = [birdX, bird.y - hawkHold(HAWK.near)];   // it follows the bird down
     h.u = Math.min(1, h.u + dt / h.T);
+    const near = h.grab ? HAWK.near : h.prey ? HAWK.prey : 0, w = Math.min(1, h.u / 0.45);
+    h.s = near ? Math.max(h.s, HAWK.far + (near - HAWK.far) * w * w * (3 - 2 * w))   // coming at us, and it stays close
+               : HAWK.far + (HAWK.feint - HAWK.far) * Math.sin(Math.PI * h.u);       // close past us, then off and away
     const u = h.u, P0 = h.P0, P1 = h.P1, P2 = h.P2;
     const Cx = 2 * P1[0] - (P0[0] + P2[0]) / 2, Cy = 2 * P1[1] - (P0[1] + P2[1]) / 2;
     h.x = (1 - u) * (1 - u) * P0[0] + 2 * u * (1 - u) * Cx + u * u * P2[0];
     h.y = (1 - u) * (1 - u) * P0[1] + 2 * u * (1 - u) * Cy + u * u * P2[1];
-    h.y = Math.min(h.y, SKY - 20);
+    h.y = Math.min(h.y, SKY - hawkPick(h.s) - 10);
     const q = h.prey && preyXY(h.prey);
-    if (q && u > 0.4 && Math.hypot(h.x - q[0], h.y + 10 - q[1]) < 16) {          // a snatch off the ground
+    if (q && u > 0.4 && Math.hypot(h.x - q[0], h.y + hawkPick(h.s) - q[1]) < 16) {          // a snatch off the ground
       h.st = "carry"; h.load = h.prey.kind;
       if (h.prey.kind === "hog") hog.taken = true; else { h.prey.g.mode = "gone"; h.prey.g.prey = false; }
       h.prey = null;
-    } else if (h.grab && !dead && u > 0.4 && Math.hypot(h.x - birdX, h.y + 10 - bird.y) < 16) {   // talons out: got it
+    } else if (h.grab && !dead && u > 0.4 && Math.hypot(h.x - birdX, h.y + hawkHold(h.s) - bird.y) < 16 + h.s) {   // talons out: got it
       h.st = "carry"; h.load = "bird"; grabbed = true; die(); flash = 0.35;
     } else if (u >= 1) {
       h.st = "back";
@@ -2561,17 +2568,21 @@ function stepHawk(dt) {
     }
   } else if (h.st === "carry") {
     h.x += (h.P2[0] < h.P0[0] ? -70 : 70) * dt; h.y -= 85 * dt;            // heavy now: a slow climb away
-    if (h.y < -40 || h.x < -40 || h.x > W + 40) { if (h.load === "hog") hog = null; hawk = null; }
+    if (h.load === "bird") h.s = Math.min(HAWK.near + 1, h.s + 0.5 * dt);   // ... passing close by us on its way out
+    const m = 8 * hawkQ(h) + 16;
+    if (h.y < -m || h.x < -m || h.x > W + m) { if (h.load === "hog") hog = null; hawk = null; }
   } else if (h.st === "out") {
     h.x += (h.cx > W / 2 ? 90 : -90) * dt; h.y -= 25 * dt;
     if (h.x < -40 || h.x > W + 40) hawk = null;
   }
+  if (h && h.st !== "stoop" && h.st !== "carry") h.s += (HAWK.far - h.s) * Math.min(1, 1.5 * dt);   // back up high, small again
   if (dt > 0) { h.vx = (h.x - x0) / dt; h.vy = (h.y - y0) / dt; }
 }
 function drawHawk() {                               // in front of everything but the HUD: it is close
   const h = hawk;
   if (!h) return;
-  const left = h.vx < -1, ang = Math.max(-1.1, Math.min(1.1, Math.atan2(h.vy, Math.abs(h.vx) + 1e-3)));
+  const tilt = h.st === "carry" ? 0.3 : h.st === "stoop" ? 0.85 : 1.1;   // laden, it beats its way up level, the load hanging
+  const left = h.vx < -1, ang = Math.max(-tilt, Math.min(tilt, Math.atan2(h.vy, Math.abs(h.vx) + 1e-3)));
   const strike = h.st === "stoop" && h.grab && h.u > 0.3 && h.u < 0.6;
   const rows = h.st === "carry" ? ((h.t * 12) | 0) % 2 ? HAWK_UP : HAWK_DN
              : h.st === "stoop" ? (strike || (h.prey && h.u > 0.3) ? HAWK_GRAB : h.u < 0.5 ? HAWK_STOOP : ((h.t * 10) | 0) % 2 ? HAWK_UP : HAWK_DN)
@@ -2579,16 +2590,18 @@ function drawHawk() {                               // in front of everything bu
   const k = 0.7 * skyDk();
   if (h.st === "carry" && h.load !== "bird") {      // a groundhog or a gopher, kicking
     const w = ((h.t * 10) | 0) % 2;
-    if (h.load === "hog") spr(HOG, HOG_PAL, h.x - 8 + w, h.y + 6, false, k, undefined, 2);
-    else spr(GOPHER, GOPHER_PAL, h.x - 9 + w, h.y + 8, h.vx < 0, k, undefined, 2);
+    const dy = 4 * hawkQ(h);
+    if (h.load === "hog") spr(HOG, HOG_PAL, h.x - 8 + w, h.y + dy - 2, false, k, undefined, 2);
+    else spr(GOPHER, GOPHER_PAL, h.x - 9 + w, h.y + dy, h.vx < 0, k, undefined, 2);
   }
   ctx.save();
   ctx.translate(Math.round(h.x), Math.round(h.y));
   if (left) ctx.scale(-1, 1);
   ctx.rotate(ang);
+  const q = hawkQ(h);                               // it grows as it comes at us
   for (let r = 0; r < rows.length; r++) for (let c = 0; c < 14; c++) {
     const ch = rows[r][c]; if (ch === ".") continue;
-    ctx.fillStyle = tint(HAWK_PAL[ch], k); ctx.fillRect(c * 2 - 14, r * 2 - 9, 2, 2);
+    ctx.fillStyle = tint(HAWK_PAL[ch], k); ctx.fillRect(c * q - 7 * q, r * q - 4.5 * q, q, q);
   }
   ctx.restore();
 }

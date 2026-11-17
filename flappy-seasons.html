@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r12</div>
+<div id="hud">seasons r13</div>
 
 <script>
 "use strict";
@@ -2617,12 +2617,12 @@ function drawHawk() {                               // in front of everything bu
 
 /* ---------- a power line on poles, just in front of the near hills: the wires sway in the wind,
    small birds sit along it (and scatter for the hawk or the thunder), and now and then
-   the lightning finds it. It comes and goes in runs of poles. ---------- */
-const POLE = { p: 0.4, gap: 118, h: 58, run: 10, on: 0.65, wireP: 0.35, fade: 0.3 };   // parallax, spacing, height, poles per run, share of runs, share of mid strikes taken by the line, haze
+   the lightning finds it. ---------- */
+const POLE = { p: 0.4, gap: 118, h: 58, wireP: 0.35, fade: 0.3 };   // parallax, spacing, height, share of mid strikes taken by the line, haze
 const WIRES = [{ dx: -8, dy: 1, sag: 5 }, { dx: 9, dy: 1, sag: 9 }, { dx: 2, dy: 13, sag: 11 }];   // two on the crossarm, a phone line lower down
 const PERCH = ["..DD", "DDDD", "D.D."], FLY_UP = ["D.D", ".D."], FLY_DN = [".D.", "D.D"];
 let perchGone = new Set(), flyers = [], lineZap = null, lineSparks = [];
-function poleOn(k) { return FLAIR_MUL > 0 && hash1(Math.floor(k / POLE.run) * 7.3 + 1.1) < POLE.on; }
+function poleOn(k) { return FLAIR_MUL > 0; }        // the line runs the whole way
 function poleX(k) { return Math.round(k * POLE.gap - dist * POLE.p) + 20; }
 function poleRange() { const k0 = Math.floor((dist * POLE.p - 70) / POLE.gap); return [k0, k0 + Math.ceil((W + 100) / POLE.gap) + 1]; }
 function spanOn(k) { return poleOn(k) && poleOn(k + 1); }

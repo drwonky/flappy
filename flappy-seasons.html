@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r5</div>
+<div id="hud">seasons r6</div>
 
 <script>
 "use strict";
@@ -410,7 +410,8 @@ function spawn(x = W + REACH) {
   const top = 30 + Math.random() * (SKY - 60 - gap);
   pipes.push({ x: x, top: top, bot: top + gap, passed: false,
                sf: 0.85 + Math.random() * 0.3,          // this pipe's share of the sand
-               cut: new Float32Array(SAND_COLS) });      // where the bird has plowed through its heap
+               cut: new Float32Array(SAND_COLS),        // where the bird has plowed through its heap
+               peck: peckFor() });                       // a woodpecker on it, some autumns
   aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
   if (SFX.desert > 0.5) spawnCactus(x + PIPE_W / 2 + speed * spaceSec / 2);     // half way to the next pipe, in the desert season
 }
@@ -440,6 +441,7 @@ function step(dt) {
   setWindMul(envWind() * windX * SFX.wind);
   if (windMul > 0) stepWind(dt);   // the wind keeps blowing through the crash
   stepSun(dt);                     // the sun, the smoke and the dust go on through the crash
+  stepFlair(dt);                   // and the life in the background
   if (dead) {
     gspd = 0;                      // ...but the world no longer scrolls
     cloudX += -airU * 0.3 * dt;
@@ -1676,20 +1678,15 @@ function drawWater() {                             // standing water: fills the 
 function skyline() {                              // green hills (snow-capped in winter); mesas in summer
   const m = SW[1], cap = Math.min(14, Math.round(snowD * 0.25));
   const dk = TSTORM.dark * ts.I, hd = dk > 0.01 ? mixHex(C.hillDark, "#10142a", dk) : C.hillDark, hl = dk > 0.01 ? mixHex(C.hill, "#10142a", dk) : C.hill;
-  if (m < 1) {
+  if (m < 1) {                                    // far hills
     ctx.globalAlpha = 1 - m;
     for (let i = 0; i < 8; i++) {
       const x = Math.round((((i * 46) - dist * 0.06) % (W + 70) + W + 70) % (W + 70) - 35);
       ctx.fillStyle = hd; ctx.fillRect(x, SKY - 26, 34, 26);
       if (cap > 0) { ctx.fillStyle = "#d3e0ec"; ctx.fillRect(x, SKY - 26, 34, cap); ctx.fillRect(x + 3, SKY - 26 + cap, 6, 2); }
     }
-    for (let i = 0; i < 9; i++) {
-      const x = Math.round((((i * 40) - dist * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
-      ctx.fillStyle = hl; ctx.fillRect(x, SKY - 14, 30, 14); ctx.fillRect(x + 4, SKY - 18, 22, 4);
-      if (cap > 0) { ctx.fillStyle = "#f4f8fc"; ctx.fillRect(x + 4, SKY - 18, 22, cap); ctx.fillRect(x, SKY - 14, 4, cap); ctx.fillRect(x + 26, SKY - 14, 4, cap); }
-    }
   }
-  if (m > 0) {
+  if (m > 0) {                                    // far mesas
     ctx.globalAlpha = m;
     ctx.fillStyle = hd;
     for (let i = 0; i < 5; i++) {
@@ -1699,6 +1696,20 @@ function skyline() {                              // green hills (snow-capped in
       ctx.fillRect(x - 6, SKY - h + 8, 64, h - 8);
       ctx.fillRect(x - 12, SKY - h + 18, 76, h - 18);
     }
+  }
+  ctx.globalAlpha = 1;
+  drawTrain();                                    // between the two rows of hills
+  drawYeti();
+  if (m < 1) {                                    // near hills
+    ctx.globalAlpha = 1 - m;
+    for (let i = 0; i < 9; i++) {
+      const x = nearHillX(i);
+      ctx.fillStyle = hl; ctx.fillRect(x, SKY - 14, 30, 14); ctx.fillRect(x + 4, SKY - 18, 22, 4);
+      if (cap > 0) { ctx.fillStyle = "#f4f8fc"; ctx.fillRect(x + 4, SKY - 18, 22, cap); ctx.fillRect(x, SKY - 14, 4, cap); ctx.fillRect(x + 26, SKY - 14, 4, cap); }
+    }
+  }
+  if (m > 0) {                                    // near mesas
+    ctx.globalAlpha = m;
     ctx.fillStyle = hl;
     for (let i = 0; i < 7; i++) {
       const x = Math.round((((i * 52) - dist * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
@@ -2066,13 +2077,363 @@ function outlineText(s, x, y, col, font) {
   ctx.fillText(s, x0, y0);
 }
 
+/* ============================================================
+   FLAIR - life going on in the background, every once in a while:
+   a goods train along the horizon, a blimp, buzzards circling in
+   summer, geese going over in spring and autumn, a flock wheeling
+   about, a yeti on the winter hills, a groundhog in spring (that
+   ducks back if it sees its shadow), a woodpecker working on a pipe
+   in autumn, gophers digging under the ground. All scenery: none of
+   it touches the bird. ?flair=0 turns it off, ?flair=4 is 4x as often.
+   ============================================================ */
+const FLAIR_MUL = qnum("flair") !== null ? Math.max(0, qnum("flair")) : 1;
+const FL = { train: [35, 75], blimp: [45, 95], buzz: [11, 24], geese: [16, 34], flock: [18, 38],
+             yeti: [9, 18], hog: [7, 14], gopher: [6, 13], peck: 0.4 };   // s between sightings; peck = share of autumn pipes
+const flNext = { train: 14, blimp: 30, buzz: 6, geese: 10, flock: 16, yeti: 4, hog: 3, gopher: 4 };
+let train = null, blimp = null, flocks = [], yeti = null, hog = null, gophers = [], chips = [], puffs = [];
+const NEAR_P = 0.14;                                // the near hills' parallax
+function nearHillX(i) { return Math.round((((i * 40) - dist * NEAR_P) % (W + 60) + W + 60) % (W + 60) - 30); }
+
+const TINT = new Map();
+function tint(col, k) {                             // darkened toward the storm's sky colour
+  if (k < 0.01) return col;
+  const q = Math.round(k * 40), key = col + q;
+  let v = TINT.get(key);
+  if (!v) { if (TINT.size > 3000) TINT.clear(); v = mixHex(col, "#10142a", q / 40); TINT.set(key, v); }
+  return v;
+}
+function skyDk() { return TSTORM.dark * ts.I; }
+function spr(rows, pal, x, y, flip, k, clipY, s = 1) {   // a cell is s logical px; nothing at or below clipY
+  x = Math.round(x); y = Math.round(y);
+  const w = rows[0].length, cy = clipY === undefined ? 1e9 : clipY;
+  for (let r = 0; r < rows.length; r++) {
+    const ry = y + r * s, h = Math.min(s, cy - ry);
+    if (h <= 0) break;
+    const row = rows[r];
+    for (let c = 0; c < w; c++) {
+      const ch = row[c]; if (ch === ".") continue;
+      ctx.fillStyle = tint(pal[ch], k);
+      ctx.fillRect(x + (flip ? w - 1 - c : c) * s, ry, s, h);
+    }
+  }
+}
+
+/* ---------- scheduling ---------- */
+function stepFlair(dt) {
+  if (FLAIR_MUL > 0) for (const k in flNext)
+    if ((flNext[k] -= dt * FLAIR_MUL) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
+  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt);
+}
+function trySpawn(k) {
+  const r = Math.random(), has = kind => flocks.some(f => f.kind === kind);
+  switch (k) {
+    case "train":  if (train) return false; train = makeTrain(); return true;
+    case "blimp":  if (blimp || ts.I > 0.05 || rainK > 0.5) return false; blimp = makeBlimp(); return true;
+    case "buzz":   if (has("buzz") || r > SW[1] + 0.4 * SW[2]) return false; flocks.push(makeBuzz()); return true;
+    case "geese":  if (has("geese") || r > 0.9 * (SW[0] + SW[2])) return false; flocks.push(makeGeese()); return true;
+    case "flock":  if (has("flock") || r > 1 - 0.7 * SW[3]) return false; flocks.push(makeFlock()); return true;
+    case "yeti":   if (yeti || r > SW[3]) return false; return !!(yeti = makeYeti());
+    case "hog":    if (hog || r > SW[0]) return false; hog = makeHog(); return true;
+    case "gopher": if (gophers.length > 1 || r > 1 - 0.5 * SW[3]) return false; gophers.push(makeGopher()); return true;
+  }
+  return false;
+}
+function hillSlot() {                               // a near hill well onto the screen, with time to spare
+  const ok = [];
+  for (let i = 0; i < 9; i++) { const x = nearHillX(i); if (x > 130 && x < W - 40) ok.push(i); }
+  return ok.length ? ok[(Math.random() * ok.length) | 0] : -1;
+}
+
+/* ---------- the train: along the horizon, between the far hills and the near ones ---------- */
+const TRAIN_COLS = [["#9a3e28", "#62261a"], ["#d0a43a", "#8e6e22"], ["#3e6e94", "#24485e"], ["#6e7e3a", "#46521f"], ["#8e8a84", "#5e5a56"]];
+const TRAIN_Y = SKY - 27;                           // top of the engine: the wheels run just behind the near hilltops
+function makeTrain() {
+  const dir = sgn(), n = 4 + (Math.random() * 5 | 0), units = [{ t: "eng", w: 22 }, { t: "tend", w: 10 }];
+  for (let i = 0; i < n; i++) units.push({ t: Math.random() < 0.3 ? "tank" : "box", w: 16, c: TRAIN_COLS[(Math.random() * TRAIN_COLS.length) | 0] });
+  units.push({ t: "cab", w: 16, c: ["#c03a2c", "#7e221a"] });
+  let len = 0; for (const u of units) { u.off = len; len += u.w + 1; }
+  return { dir, units, len, v: 34 + Math.random() * 14, x: dir > 0 ? -len - 4 : W + 4, puffT: 0, t: 0 };
+}
+function unitX(u) { return train.dir < 0 ? train.x + u.off : train.x + train.len - u.off - u.w; }
+function stepTrain(dt) {
+  for (const p of puffs) { p.age += dt; p.x += (airU * 0.3 - gspd * 0.1) * dt; p.y -= (7 + 3 * p.age) * dt; }
+  puffs = puffs.filter(p => p.age < p.life);
+  if (!train) return;
+  const tr = train; tr.t += dt;
+  tr.x += (tr.dir * tr.v - gspd * 0.1) * dt;
+  if ((tr.puffT -= dt) <= 0 && puffs.length < 40) {
+    tr.puffT = 0.16 + Math.random() * 0.1;
+    const ex = unitX(tr.units[0]);
+    puffs.push({ x: ex + (tr.dir < 0 ? 5 : 16), y: TRAIN_Y - 1, age: 0, life: 1.8 + Math.random() * 0.8 });
+  }
+  if (tr.dir < 0 ? tr.x + tr.len < -12 : tr.x > W + 12) train = null;
+}
+function drawTrain() {
+  const k = skyDk();
+  for (const p of puffs) {                          // smoke from the stack, thinning as it climbs
+    const s = 2 + Math.round(p.age * 2);
+    ctx.globalAlpha = 0.55 * (1 - p.age / p.life);
+    px(p.x - s / 2, p.y - s / 2, s, s, tint("#8a8a92", k));
+  }
+  ctx.globalAlpha = 1;
+  if (!train) return;
+  const tr = train, y = TRAIN_Y, snow = SFX.snow > 0.5 && snowD > 1;
+  for (const u of tr.units) {
+    const ux = Math.round(unitX(u));
+    if (ux > W || ux + u.w < 0) continue;
+    const R = (dx, dy, w, h, col) => px(tr.dir < 0 ? ux + dx : ux + u.w - dx - w, y + dy, w, h, tint(col, k));
+    if (u.t === "eng") {
+      R(4, 0, 3, 3, "#1e1e24"); R(3, 0, 5, 1, "#1e1e24");                 // stack
+      R(9, 1, 3, 2, "#2e2e36");                                          // dome
+      R(2, 3, 13, 5, "#2a2a32"); R(2, 3, 13, 1, "#4c4c58");              // boiler
+      R(14, 0, 8, 1, "#1e1e24"); R(15, 1, 7, 7, "#8a2c22"); R(17, 2, 3, 3, "#ffd86a");   // cab, lit window
+      R(0, 7, 3, 2, "#5a5a62"); R(1, 3, 1, 2, "#fff6c0");               // cowcatcher, lamp
+      R(1, 8, 21, 1, "#141418");
+      R(2, 9, 2, 2, "#3a3a42"); for (const wx of [6, 10, 14]) R(wx, 9, 3, 2, "#3a3a42");
+      R(6 + ((tr.t * 8) | 0) % 3 * 4, 9, 9, 1, "#8a8a94");              // the rod, going round
+      if (snow) R(15, 0, 7, 1, "#f4f8fc");
+    } else if (u.t === "tend") {
+      R(0, 3, 10, 5, "#2a2a32"); R(1, 2, 8, 1, "#141414"); R(0, 8, 10, 1, "#141418");
+      R(1, 9, 3, 2, "#3a3a42"); R(6, 9, 3, 2, "#3a3a42");
+    } else {
+      const [a, b] = u.c;
+      if (u.t === "box") { R(0, 1, 16, 7, a); R(0, 1, 16, 1, b); R(6, 2, 4, 5, b); if (snow) R(0, 0, 16, 1, "#f4f8fc"); }
+      else if (u.t === "tank") { R(1, 3, 14, 5, a); R(0, 4, 16, 3, a); R(1, 3, 14, 1, "#d8d8d8"); R(7, 2, 2, 1, b); if (snow) R(2, 2, 12, 1, "#f4f8fc"); }
+      else { R(1, 2, 14, 6, a); R(5, 0, 6, 2, a); R(4, 0, 8, 1, b); R(3, 3, 2, 2, "#ffd86a"); R(11, 3, 2, 2, "#ffd86a"); if (snow) R(4, -1, 8, 1, "#f4f8fc"); }
+      R(0, 8, 16, 1, "#141418"); R(1, 9, 3, 2, "#3a3a42"); R(12, 9, 3, 2, "#3a3a42");
+    }
+  }
+}
+
+/* ---------- the blimp: slow, high, behind the clouds ---------- */
+function makeBlimp() { const dir = sgn(); return { dir, x: dir > 0 ? -40 : W + 40, y: 36 + Math.random() * 90, v: 9 + Math.random() * 6, t: 0 }; }
+function stepBlimp(dt) {
+  if (!blimp) return;
+  const b = blimp; b.t += dt;
+  b.x += (b.dir * b.v + airU * 0.12 - gspd * 0.03) * dt;
+  if (b.x < -60 || b.x > W + 60) blimp = null;
+}
+function drawBlimp() {
+  if (!blimp) return;
+  const b = blimp, d = b.dir, cx = Math.round(b.x), cy = Math.round(b.y + 2 * Math.sin(b.t * 0.6));
+  const tail = cx - d * 22;
+  for (let r = -8; r <= 8; r++) {                   // tail fins, red, top and bottom
+    const a = Math.abs(r); if (a < 5) continue;
+    const w = 13 - a; px(d > 0 ? tail - 3 : tail + 3 - w, cy + r, w, 1, "#b8342a");
+  }
+  for (let r = -7; r <= 7; r++) {                   // the envelope: an outline, then lit top, body, shade
+    const hw = Math.round(24 * Math.sqrt(1 - (r / 7.6) ** 2));
+    px(cx - hw - 1, cy + r, 2 * hw + 2, 1, "#56606c");
+  }
+  for (let r = -6; r <= 6; r++) {
+    const hw = Math.round(24 * Math.sqrt(1 - (r / 7.6) ** 2)) - 1;
+    px(cx - hw, cy + r, 2 * hw, 1, r < -3 ? "#eef2f6" : r < 3 ? "#c8d0d8" : "#98a2ae");
+  }
+  px(d > 0 ? tail - 3 : tail - 6, cy, 10, 1, "#8e2a22");             // the side fin, edge on
+  px(cx + d * 6 - 3, cy - 3, 6, 5, "#f8e018"); px(cx + d * 6 - 2, cy - 4, 4, 7, "#f8e018");   // a yellow bird on the side
+  px(cx + d * 6 + (d > 0 ? 1 : -2), cy - 2, 1, 1, "#20242a"); px(cx + d * 6 + (d > 0 ? 3 : -4), cy, 2, 1, "#e8483a");
+  px(cx - 6, cy + 7, 12, 3, "#4e5864");             // the gondola
+  for (let i = 0; i < 3; i++) px(cx - 4 + i * 3, cy + 8, 1, 1, "#ffd86a");
+  if ((b.t * 20 | 0) % 2) px(cx - d * 8, cy + 6, 1, 4, "#c8d0d8");   // the propeller
+  if ((b.t * 1.2 % 1) < 0.15) px(tail, cy - 9, 1, 1, "#ff3a2a");     // nav light
+}
+
+/* ---------- birds in the sky ---------- */
+const BUZZ = [["K.........K", ".KK.....KK.", "...KKKKK...", "...HK......"],    // soaring, on a dihedral
+              ["...........", "KKKKKKKKKKK", "...KKKKK...", "...HK......"]];   // a lazy flap
+const GOOSE = [["K...K.", ".KKKKK"], [".KKKKK", "K...K."]];
+function makeBuzz() {
+  const n = 2 + (Math.random() * 3 | 0), b = [];
+  for (let i = 0; i < n; i++) b.push({ ph: i * 6.283 / n + Math.random() * 0.6, rr: 0.7 + Math.random() * 0.5, w: 0.45 + Math.random() * 0.2, fl: Math.random() * 9 });
+  return { kind: "buzz", cx: W + 50, cy: 60 + Math.random() * 90, r: 24 + Math.random() * 14, t: 0, b };
+}
+function makeGeese() { const dir = sgn(); return { kind: "geese", dir, x: dir > 0 ? -60 : W + 60, y: 28 + Math.random() * 80, v: 34 + Math.random() * 10, t: 0, n: 5 + (Math.random() * 5 | 0) }; }
+function makeFlock() {
+  const n = 12 + (Math.random() * 9 | 0), b = [];
+  for (let i = 0; i < n; i++) b.push({ ph: Math.random() * 6.283, f1: 0.8 + Math.random() * 0.4, f2: 0.8 + Math.random() * 0.5 });
+  return { kind: "flock", cx: W + 40, cy: 50 + Math.random() * 100, t: 0, b };
+}
+function stepFlocks(dt) {
+  for (const f of flocks) {
+    f.t += dt;
+    if (f.kind === "geese") f.x += (f.dir * f.v - gspd * 0.07) * dt;
+    else f.cx += (airU * 0.08 - gspd * (f.kind === "buzz" ? 0.08 : 0.1) - 4) * dt;
+  }
+  flocks = flocks.filter(f => f.kind === "geese" ? (f.dir > 0 ? f.x < W + 60 + f.n * 5 : f.x > -60 - f.n * 5) : f.cx > -70);
+}
+function drawFlocks() {
+  for (const f of flocks) {
+    if (f.kind === "buzz") {
+      for (const q of f.b) {                        // all wheeling the same way, on a tilted ring
+        const a = q.ph + q.w * f.t, x = f.cx + Math.cos(a) * f.r * q.rr, y = f.cy + Math.sin(a) * f.r * q.rr * 0.4;
+        const flap = ((f.t + q.fl) % 9) < 0.5 && ((f.t * 6) | 0) % 2;
+        spr(BUZZ[flap ? 1 : 0], { K: "#2a1e1a", H: "#c8584a" }, x - 5, y - 2, Math.sin(a) > 0, 0);
+      }
+    } else if (f.kind === "geese") {
+      for (let i = 0; i < f.n; i++) {               // a V: the leader in front, the arms trailing
+        const k = Math.ceil(i / 2), s = i % 2 ? -1 : 1;
+        spr(GOOSE[((f.t * 5 + i * 0.7) | 0) % 2], { K: "#2e2a26" }, f.x - f.dir * k * 8, f.y + s * k * 4, f.dir < 0, 0);
+      }
+    } else {
+      ctx.fillStyle = "#1e2228";
+      for (const q of f.b) {                        // a little cloud of birds turning over and over
+        const t = f.t, x = f.cx + 26 * Math.sin(t * 0.9 * q.f1 + q.ph) + 10 * Math.sin(t * 2.1 * q.f2 + 2 * q.ph);
+        const y = f.cy + 12 * Math.sin(t * 1.3 * q.f1 + 1.7 * q.ph) + 6 * Math.cos(t * 2.7 * q.f2 + q.ph);
+        if (((t * 8 + q.ph * 3) | 0) % 3) ctx.fillRect(Math.round(x) - 1, Math.round(y), 3, 1);
+        else ctx.fillRect(Math.round(x), Math.round(y) - 1, 1, 2);
+      }
+    }
+  }
+}
+
+/* ---------- the yeti: up behind a winter hill, a wave, sometimes a roar ---------- */
+const YETI = [
+  "....WWWWWW....", "...WWWWWWWW...", "..WWSFFFFSWW..", "..WWFEFFEFWW..", "..WWFFFFFFWW..", "..WWFMMMMFWW..",
+  "...WWFFFFWW...", ".WWWWWWWWWWW..", "WWWWWWWWWWWW..", "WWSWWWWWWWWS..", "WWSWWWWWWWWS..", "WW.SWWWWWWS...",
+  "WW.SWWWWWWS...", "SS.WWWWWWWW...", "SS.WWWWWWWW...", "...WWWWWWWW...", "...WWWSSWWW...", "...WWW..WWW..."];
+const YETI_ROAR = ["..WWFFFFFFWW..", "..WFMRRRRMFW..", "...WFMMMMFW..."];   // rows 4-6, mouth open
+const YETI_PAL = { W: "#f4f8fc", S: "#bfd0e0", F: "#7f97b0", E: "#1a2030", M: "#2a1a2a", R: "#b02a3a" };
+function makeYeti() { const i = hillSlot(); return i < 0 ? null : { i, t: 0, dur: 4.2 + Math.random() * 1.5, roar: Math.random() < 0.4, x0: nearHillX(i) }; }
+function stepYeti(dt) {
+  if (!yeti) return;
+  yeti.t += dt;
+  const x = nearHillX(yeti.i);
+  if (yeti.t > yeti.dur || x > yeti.x0 + 40) yeti = null;   // done, or its hill wrapped round
+  else yeti.x0 = x;
+}
+function drawYeti() {                               // drawn BEFORE the near hills: they hide its legs
+  if (!yeti) return;
+  const t = yeti.t, d = yeti.dur, up = smooth(Math.min(t / 0.8, (d - t) / 0.6));
+  const x = nearHillX(yeti.i) + 8, y = Math.round(SKY - 18 - 16 * up), k = skyDk();
+  spr(YETI, YETI_PAL, x, y, false, k);
+  if (yeti.roar && t > 2.6 && t < d - 1) spr(YETI_ROAR, YETI_PAL, x, y + 4, false, k);
+  const waving = t > 1 && t < 2.8, w = ((t * 5) | 0) % 2;   // right arm: up and waving, or down
+  if (waving) { px(x + 12, y + 2, 2, 7, tint("#f4f8fc", k)); px(x + 12 + w, y, 2, 3, tint("#bfd0e0", k)); }
+  else { px(x + 12, y + 8, 2, 6, tint("#f4f8fc", k)); px(x + 12, y + 13, 2, 2, tint("#bfd0e0", k)); }
+}
+
+/* ---------- the groundhog: up out of the spring grass; if it sees its shadow, straight back down ---------- */
+const HOG = ["..BBBB..", ".BBBBBB.", ".BEBBEB.", ".BBNNBB.", "..BTTB..", ".BLLLLB.", "BBLLLLBB", ".BLLLLB.", ".BLLLLB.", ".BBBBBB."];
+const HOG_PAL = { B: "#7a5232", L: "#b98a5a", E: "#141414", N: "#3a2418", T: "#ffffff" };
+function makeHog() {
+  const sunny = sunMul > 0 && cloudCover() < 0.4 && rainK < 0.3 && ts.I < 0.05;
+  return { gx: dist + W + 12, t: -1, sunny, dur: sunny ? 1.4 : 3 };
+}
+function stepHog(dt) {
+  if (!hog) return;
+  const x = hog.gx - dist;
+  if (hog.t < 0) { if (x < W - 70) hog.t = 0; }    // its hole scrolls into view, then up it comes
+  else hog.t += dt;
+  if (x < -30) hog = null;
+}
+function drawHog() {                                // in front, on the ground, 2x like the bird
+  if (!hog) return;
+  const t = hog.t, d = hog.dur, x = Math.round(hog.gx - dist), sy = Math.round(SKY - groundCoverH(x)), k = 0.7 * skyDk();
+  px(x - 9, sy - 2, 4, 2, tint("#8a6a42", k)); px(x + 5, sy - 2, 4, 2, tint("#8a6a42", k));   // the dirt it threw up
+  px(x - 6, sy - 1, 12, 2, tint("#3a2a1a", k));                                              // the hole
+  if (t < 0 || t > d) return;
+  const dive = hog.sunny && t > 1.2;                // it saw its shadow
+  const up = dive ? 1 - smooth((t - 1.2) / 0.15) : smooth(Math.min(t / 0.25, (d - t) / 0.3));
+  const y = sy - Math.round(20 * up), look = t > 0.35 && !dive ? Math.round(Math.sin(t * 7)) * 2 : 0;
+  if (hog.sunny && up > 0.6) {                      // its shadow on the grass, away from the sun
+    const L = 12 + Math.round(18 * Math.abs(sunSX)), sx = sunXY()[0];
+    ctx.fillStyle = "rgba(20,30,10,.35)"; ctx.fillRect(sx < x ? x + 7 : x - 7 - L, sy, L, 2);
+  }
+  spr(HOG.slice(5), HOG_PAL, x - 8, y + 10, false, k, sy, 2);
+  spr(HOG.slice(0, 5), HOG_PAL, x - 8 + look, y, false, k, sy, 2);
+  if (hog.sunny && t > 0.85 && t < 1.25) {          // !
+    px(x - 2, y - 15, 4, 10, C.ink); px(x - 2, y - 4, 4, 4, C.ink);
+    px(x - 1, y - 14, 2, 8, "#ffffff"); px(x - 1, y - 3, 2, 2, "#ffffff");
+  }
+}
+
+/* ---------- the woodpecker: hanging on the back of a lower pipe, hammering ---------- */
+const PECKER = ["...RR...", "..RRRK..", "..KWWK..", "BBKWEK..", "...WWK..", "...KWKK.", "...KWKWK",
+                "...KWKKK", "...KKWKW", "...KWKKK", "...KKWK.", "....KK..", "....KK..", ".....K.."];
+const PECK_PAL = { R: "#d8282a", K: "#1c1c20", W: "#f2f2ea", E: "#141414", B: "#585858" };
+function peckFor() {                                // at spawn: does this pipe get one?
+  return FLAIR_MUL > 0 && Math.random() < FL.peck * SW[2] ? { f: Math.random(), ph: Math.random() * 3, hit: 0 } : null;
+}
+function drawPecker(p) {
+  const q = p.peck, room = SKY - (p.bot + CAP_H) - 44;
+  if (!q || room < 2) return;
+  const y = Math.round(p.bot + CAP_H + 6 + q.f * room), x = Math.round(p.x + PIPE_W);
+  if (y + 28 > SKY - groundCoverH(x + 8)) return;   // buried in the drift: it has gone
+  const c = (airClock + q.ph) % 1.4, n = c < 0.6 ? (c / 0.09) | 0 : -1, hit = n >= 0 && (c / 0.09) % 1 < 0.5;
+  const k = 0.7 * skyDk();
+  spr(PECKER.slice(5), PECK_PAL, x, y + 10, false, k, undefined, 2);
+  spr(PECKER.slice(0, 5), PECK_PAL, x - (hit ? 2 : 0), y, false, k, undefined, 2);
+  if (hit && n !== q.hit && !dead && chips.length < 60) {   // a chip of green paint flies off each blow
+    chips.push({ x: x, y: y + 7, vx: 25 + Math.random() * 45, vy: -40 - Math.random() * 50, age: 0, col: Math.random() < 0.5 ? C.pipeLt : C.pipeMid });
+  }
+  q.hit = n;
+}
+function stepChips(dt) {
+  for (const c of chips) { c.age += dt; c.vy += 300 * dt; c.x += (c.vx - gspd) * dt; c.y += c.vy * dt; }
+  chips = chips.filter(c => c.age < 0.6);
+}
+function drawChips() { for (const c of chips) px(c.x, c.y, 2, 2, c.col); }
+
+/* ---------- gophers: a cutaway of the ground, a tunnel dug as you watch, and up for a look ---------- */
+const GOPHER = ["..BBBBB..", ".BBBBBBEB", "BBBBBBBBN", "BLLLLBBTB", ".BBBBBBB.", ".C.C.C.C."];
+const GOPHER_HEAD = [".BBB.", "BEBEB", "BBNBB", ".BTB."];
+const GOPHER_PAL = { B: "#8a5a32", L: "#c09060", E: "#141414", N: "#ff9aa8", T: "#ffffff", C: "#3a2a1a" };
+function makeGopher() {
+  const y = SKY + 70 + Math.random() * 26;
+  return { gx: W + 12 + dist, y, ty: y, v: 26 + Math.random() * 10, t: 0, up: 0.5 + Math.random() * 0.5, mode: "dig", tun: [], peek: 0 };
+}
+function stepGophers(dt) {
+  for (const g of gophers) {
+    g.t += dt;
+    if (g.mode === "dig") {
+      g.gx += g.v * dt;
+      if (Math.abs(g.y - g.ty) < 1) g.ty = SKY + 66 + Math.random() * 32;
+      g.y += Math.sign(g.ty - g.y) * 8 * dt;
+      if (g.t > g.up) g.mode = "rise";
+    } else if (g.mode === "rise") {
+      g.gx += 6 * dt; g.y -= 95 * dt;
+      if (g.y <= SKY + 10) { g.y = SKY + 10; g.mode = "peek"; g.peek = 0; g.mound = g.gx; }
+    } else if (g.mode === "peek") {
+      if ((g.peek += dt) > 1.2) g.mode = "gone";
+    }
+    const last = g.tun[g.tun.length - 1];
+    if (g.mode !== "gone" && (!last || Math.hypot(g.gx - last[0], g.y - last[1]) >= 2)) g.tun.push([g.gx, g.y]);
+  }
+  gophers = gophers.filter(g => (g.tun.length ? Math.max(g.gx, g.mound || 0) : g.gx) - dist > -20);
+}
+function drawGophers() {                            // after the ground, before the storm dims it
+  if (!gophers.length) return;
+  const tc = mixHex(C.sandDark, "#2a1a0c", 0.6), rim = mixHex(C.sandDark, "#2a1a0c", 0.3);
+  for (const g of gophers) {
+    for (const [wx, y] of g.tun) { const x = Math.round(wx - dist); if (x > -8 && x < W + 8) px(x - 6, y - 8, 12, 16, rim); }
+    for (const [wx, y] of g.tun) { const x = Math.round(wx - dist); if (x > -8 && x < W + 8) px(x - 5, y - 7, 10, 14, tc); }
+    const x = Math.round(g.gx - dist);
+    if (g.mode === "dig") {
+      spr(GOPHER, GOPHER_PAL, x - 14, g.y - 6, false, 0, undefined, 2);
+      if (((g.t * 10) | 0) % 2) px(x + 5, g.y - 5 + ((g.t * 20) | 0) % 8, 2, 2, rim);   // dirt flying at the face
+    } else if (g.mode === "rise") {
+      spr(GOPHER_HEAD, GOPHER_PAL, x - 5, g.y - 8, false, 0, undefined, 2);
+    }
+    if (g.mound !== undefined) {                    // a fresh heap of dirt on top
+      const mx = Math.round(g.mound - dist), sy = Math.round(SKY - groundCoverH(mx));
+      if (g.mode === "peek") {
+        const up = smooth(Math.min(g.peek / 0.2, (1.2 - g.peek) / 0.2)), look = ((g.peek * 3) | 0) % 2;
+        spr(GOPHER_HEAD, GOPHER_PAL, mx - 5 + look * 2, sy - Math.round(10 * up), false, 0, sy, 2);
+      }
+      px(mx - 9, sy - 2, 18, 2, "#6a4a2a"); px(mx - 6, sy - 4, 12, 2, "#7e5a34"); px(mx - 3, sy - 5, 6, 1, "#8e6a40");
+    }
+  }
+}
+
 function draw() {
   blendPalette();
   sky();
   drawSun();
+  drawBlimp();                                   // high up, behind the clouds
   clouds();
   drawSmoke();                                   // far away, behind everything solid
   drawRainbow();
+  drawFlocks();                                  // birds wheeling in the sky
   stormSky();                                    // the storm's dark sky, lit up by the flashes...
   drawStrikes(0);                                // ...far lightning, behind the far hills, which stand out against it
   skyline();
@@ -2088,9 +2449,13 @@ function draw() {
     pipePart(p.x, 0, p.top, true);
     pipePart(p.x, p.bot, SKY, false);
     pipeSand(p);
+    drawPecker(p);
   }
+  drawChips();
   drawWater();
   ground();
+  drawGophers();
+  drawHog();
   stormLow();
   groundShadows();
   drawStreaksSwirls();                           // in FRONT of the pipes: the pipes are solid, so

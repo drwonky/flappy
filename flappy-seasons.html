@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r14</div>
+<div id="hud">seasons r15</div>
 
 <script>
 "use strict";
@@ -404,6 +404,7 @@ function reset() {
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; heatFx();
   struck = false; grabbed = false;
+  quake = null; quakeK = 0; fallen = []; cracks = []; rocks = [];
   ramp(0); gspd = speed;
   firstPipes();
 }
@@ -462,7 +463,7 @@ function step(dt) {
 
   // pipes are spaced by DISTANCE, so wind never squeezes two gates together
   since += gspd * dt;
-  if (since >= speed * spaceSec) { since = 0; spawn(); }
+  if (since >= speed * spaceSec) { since = 0; spawn(); quakeSpawn(); }
 
   if (windMul > 0) {
     curSince += gspd * dt;
@@ -500,6 +501,7 @@ function step(dt) {
   cooldown -= dt;
   let n = null;
   for (const p of pipes) { if (p.x + PIPE_W > birdX - HW) { n = p; break; } }
+  if (!n && quake && quake.fell) n = quakeAim();
   stepHeat(dt);
   stepIce(dt);
   plowCover();
@@ -527,11 +529,12 @@ function step(dt) {
     if (!p.passed && p.x + PIPE_W < birdX - HW) { p.passed = true; score++; if (score > best) best = score; }
   }
   pipes = pipes.filter(p => p.x + PIPE_W + CAP_X > -REACH);
+  stepQuake(dt);                   // after the pipes move: the fallen ones keep pace
   stepAir(dt);                     // after the pipes move, so nothing is left overlapping one
   stepTrail(dt);
 
   if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(birdX, bird.y + (bird.y > SKY / 2 ? HH : -HH), "ground"); return; }
-  for (const p of pipes) {
+  if (!quake || quake.rose) for (const p of pipes) {   // from the first rumble the pipes cannot hurt it
     if (birdX + HW > p.x && birdX - HW < p.x + PIPE_W &&
         (bird.y - HH < p.top || bird.y + HH > p.bot)) {
       const face = birdX < p.x;                      // into the side of it, or onto a lip?
@@ -743,7 +746,7 @@ function strike(layer, q) {
              { y0: [4, 30], y1: [0, 0], jag: 8, fl: 0.8 }][layer];             // the power line
   if (layer === 3 && !q) return;
   let x1 = 10 + Math.random() * (W - 20), y1 = randIn(L.y1);
-  const zap = !q && layer === 2 && !dead && Math.random() < TSTORM.zapP;
+  const zap = !q && layer === 2 && !dead && !quake && Math.random() < TSTORM.zapP;
   if (layer === 2) y1 = SKY - Math.max(groundCoverH(x1), waterD);
   if (zap) { x1 = birdX; y1 = bird.y; }
   if (q) { x1 = q.x; y1 = q.y; }
@@ -1739,6 +1742,7 @@ function skyline() {                              // green hills (snow-capped in
     }
   }
   ctx.globalAlpha = 1;
+  drawRocks();                                    // shaken loose by a quake
   drawPoles();                                    // the power line, in front of the hills
 }
 
@@ -2002,7 +2006,7 @@ function drawHeatHud() {                           // heat (or ice), spelled out
     txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
   }
   const wc = windCool(), c = cloudCover(), b = blazeK();
-  const air = ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : hawk && hawk.st !== "out" && !dead ? ["HAWK ABOUT", "#ffd27a"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
+  const air = quake ? quakeLabel() : ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : hawk && hawk.st !== "out" && !dead ? ["HAWK ABOUT", "#ffd27a"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
             : wc < 0.6 ? ["STILL AIR", "#ffc070"] : wc > 1.4 ? ["STRONG BREEZE", "#9fe0ff"] : ["BREEZE", "#cfe8f0"];
   txt(air[0], W - 8, 96, air[1], F.hud, "right");
   const fx = Math.round(100 * (1 - flapEff / FLAP));
@@ -2557,7 +2561,7 @@ function hawkToward(h, x, y, v, dt) {               // fly straight at a point; 
 function startStoop(h) {
   scarePerch();                                    // the small birds know that shape
   h.st = "stoop"; h.u = 0; h.P0 = [h.x, h.y];
-  h.grab = Math.random() < HAWK.grabP;
+  h.grab = !quake && Math.random() < HAWK.grabP;   // nothing gets the bird in a quake
   if (h.grab) { h.P1 = [birdX, bird.y - hawkHold(HAWK.near)]; h.P2 = [birdX - 170, 30]; }
   else {                                          // a feint: down at the bird, then it breaks off up and away
     h.P1 = [birdX + 50 + Math.random() * 35, Math.max(24, bird.y - 12 - Math.random() * 40)];
@@ -2674,6 +2678,155 @@ function drawHawk() {                               // in front of everything bu
   ctx.restore();
 }
 
+/* ---------- an earthquake, once in a long while. A rumble, then the big one: the pipes topple flat,
+   the poles splay, the wires sag and snap, the ground cracks open and rocks tumble off the hills.
+   For 30 s the bird has a free pass (every fallen pipe still scores); then it all stands back up. ---------- */
+const QUAKE = { rate: 1 / 300, rumble: 1.3, down: 30, rise: 4, riseDur: 1.8, mid: 170, shock: 6 };   // per s; phases, s; the free-pass line, px; shake, px
+const QUAKE_MUL = qnum("quake") !== null ? Math.max(0, qnum("quake")) : 1;
+let quake = null, quakeK = 0, fallen = [], cracks = [], rocks = [];
+const quakeT1 = () => QUAKE.rumble + QUAKE.down;
+function startQuake() {
+  if (quake || dead) return;
+  quake = { t: 0, fell: false, rose: false, after: 0, nextAfter: 6 + Math.random() * 6, crackAt: dist };
+}
+function fallOf(p, d0) { return { p, d0, age: 0, dirB: sgn(), dirT: sgn(), landed: false }; }
+function topple() {                                 // the big one
+  for (const p of pipes) fallen.push(fallOf(p, Math.random() * 0.7));
+  pipes = []; aimOff = 0;
+  scarePerch();
+  if (hog && hog.t > 0 && hog.fry === undefined && !hog.taken) hog.t = Math.max(hog.t, hog.dur - 0.3);   // everyone underground
+  for (const g of gophers) if (g.mode === "peek" && g.fry === undefined) g.mode = "gone";
+  if (FLAIR_MUL > 0 && !flocks.some(f => f.kind === "flock")) flocks.push(makeFlock());
+  for (let x = 10 + Math.random() * 40; x < W; x += 45 + Math.random() * 60) cracks.push(makeCrack(dist + x));
+  shakeRocks(12);
+  for (let i = 0; i < 40; i++) spawnDust(Math.random() * W, SKY - 1, -20 - Math.random() * 70);
+}
+function shakeRocks(n) {                            // loose rock off the near hilltops
+  for (let i = 0; i < n; i++)
+    rocks.push({ x: Math.random() * W, y: SKY - 18 - Math.random() * 4, vx: (Math.random() * 2 - 1) * 25, vy: -20 - Math.random() * 50,
+                 s: Math.random() < 0.4 ? 3 : 2, t: 0 });
+}
+function standUp() {                                // the ones clear of the bird get up again
+  for (const f of fallen) {
+    f.rd = Math.random() * 0.8;
+    const behind = f.p.x + PIPE_W + CAP_X < birdX - HW - 12;
+    const ahead = f.p.x - CAP_X - (birdX + HW) > gspd * (f.rd + QUAKE.riseDur) + 40;
+    if (behind || ahead) f.r = 0;
+  }
+}
+function quakeSpawn() {                             // a pipe coming in while the ground is shaken flat: it is down already
+  if (!quake || !quake.fell) return;
+  const p = pipes.pop();
+  p.top = QUAKE.mid - GAP0 / 2; p.bot = p.top + GAP0;  // a wide gap on the bird's line, for when it stands back up
+  aimOff = 0;
+  const f = fallOf(p, -9); f.landed = true;
+  if (quake.rose) { f.r = 0; f.rd = 0; }
+  fallen.push(f);
+}
+function quakeLabel() {                            // the HUD's weather line while it lasts
+  const t = quake.t, T1 = quakeT1();
+  return t < QUAKE.rumble + 3 ? ["EARTHQUAKE", "#ffb070"] : t < T1 ? ["FREE PASS " + Math.ceil(T1 - t), "#ffe08a"] : ["PIPES RISING", "#ffb070"];
+}
+function quakeAim() {                               // nothing standing to steer by: hold the free-pass line
+  return { x: birdX + 1, top: QUAKE.mid - GAP0 / 2, bot: QUAKE.mid + GAP0 / 2 };
+}
+function makeCrack(gx) {
+  const pts = [[0, 0]], n = 4 + ((Math.random() * 5) | 0);
+  let x = 0, y = 0;
+  for (let i = 0; i < n; i++) { x += (Math.random() * 2 - 1) * 5; y += 5 + Math.random() * 7; pts.push([x, y]); }
+  return { gx, pts, w: 3 + Math.random() * 2 };
+}
+function quakeShake() {                             // px of screen shake
+  if (!quake) return 0;
+  const t = quake.t, T1 = quakeT1();
+  if (t < QUAKE.rumble) return 0.5 + 2 * t / QUAKE.rumble;
+  if (t < T1) return QUAKE.shock * Math.exp(-(t - QUAKE.rumble) / 1.8) + 2.5 * quake.after / 1.2;
+  return 1.2 * Math.max(0, 1 - (t - T1) / QUAKE.rise);   // rumbling back up
+}
+function stepQuake(dt) {
+  if (!quake && QUAKE_MUL > 0 && clock > 15 && Math.random() < dt * QUAKE.rate * QUAKE_MUL) startQuake();
+  const R = QUAKE.riseDur;
+  for (const f of fallen) {
+    f.p.x -= gspd * dt; f.age += dt;
+    if (f.r !== undefined) f.r += dt;
+    if (!f.p.passed && f.p.x + PIPE_W < birdX - HW) { f.p.passed = true; score++; if (score > best) best = score; }   // still counts
+    if (!f.landed && f.age - f.d0 > 0.9) {          // it hits the ground: dust all along it
+      f.landed = true;
+      const cx = f.p.x + PIPE_W / 2, L = SKY - f.p.bot;
+      for (let i = 0; i < 16; i++) spawnDust(cx + f.dirB * Math.random() * L, SKY - 2, -30 - Math.random() * 70);
+      for (let i = 0; i < 10; i++) spawnDust(cx + (Math.random() - 0.5) * f.p.top, SKY - 4, -30 - Math.random() * 60);
+    }
+    if (f.r !== undefined && f.r >= f.rd + R) { pipes.push(f.p); f.done = true; }   // standing again: solid again
+  }
+  if (fallen.some(f => f.done)) pipes.sort((a, b) => a.x - b.x);
+  fallen = fallen.filter(f => !f.done && f.p.x + SKY > -20);
+  for (const r of rocks) {
+    r.t += dt; r.vy += 300 * dt; r.x += (r.vx - gspd * NEAR_P) * dt; r.y += r.vy * dt;
+    if (r.y > SKY - r.s) { r.y = SKY - r.s; r.vy *= -0.35; r.vx *= 0.7; }
+  }
+  rocks = rocks.filter(r => r.t < 3.5 && r.x > -6);
+  if (!quake) return;
+  const q = quake, T1 = quakeT1();
+  q.t += dt;
+  if (!q.fell && q.t >= QUAKE.rumble) { q.fell = true; topple(); }
+  if (!q.rose && q.t >= T1) { q.rose = true; standUp(); }
+  quakeK = q.t < QUAKE.rumble ? 0 : q.t < T1 ? smooth((q.t - QUAKE.rumble) / 1.0) : 1 - smooth((q.t - T1) / (QUAKE.rise - 0.5));
+  q.after = Math.max(0, q.after - dt);
+  if (q.fell && !q.rose && (q.nextAfter -= dt) <= 0) {   // aftershocks
+    q.after = 1.2; q.nextAfter = 5 + Math.random() * 8; shakeRocks(4);
+    for (let i = 0; i < 12; i++) spawnDust(Math.random() * W, SKY - 1, -20 - Math.random() * 40);
+  }
+  if (q.fell && !q.rose && dist - q.crackAt > 50 + Math.random() * 70) { q.crackAt = dist; cracks.push(makeCrack(dist + W + 20)); }
+  cracks = cracks.filter(c => c.gx - dist > -20);
+  if (q.t > T1 + QUAKE.rise) { quake = null; quakeK = 0; cracks = []; }
+}
+function drawFallen() {                             // before the ground, so a pipe lying flat is half buried
+  const R = QUAKE.riseDur;
+  for (const f of fallen) {
+    const p = f.p, cx = Math.round(p.x + PIPE_W / 2), v = f.age - f.d0;
+    if (v < 0) {                                    // not gone yet: still standing, shaking
+      const j = Math.round(Math.sin(f.age * 60 + p.x) * 1.5);
+      pipePart(p.x + j, 0, p.top, true); pipePart(p.x + j, p.bot, SKY, false); continue;
+    }
+    const rr = f.r !== undefined ? smooth((f.r - f.rd) / R) : 0, up = 1 - rr;
+    const u = Math.min(1, v / 0.9), w = v - 0.9;
+    const bounce = w > 0 ? 0.07 * Math.exp(-5 * w) * Math.abs(Math.sin(11 * w)) : 0;
+    ctx.save(); ctx.translate(cx, SKY); ctx.rotate(f.dirB * Math.PI / 2 * (u * u - bounce) * up);
+    pipePart(-PIPE_W / 2, -(SKY - p.bot), 0, false); ctx.restore();
+    const ft = Math.min(1, Math.max(0, (v - 0.1) / 0.8)) ** 2 * up, L = p.top;
+    ctx.save(); ctx.translate(cx + f.dirT * 10 * ft, L / 2 + (SKY - 12 - L / 2) * ft); ctx.rotate(f.dirT * Math.PI / 2 * Math.min(1, ft * 1.2));
+    pipePart(-PIPE_W / 2, -L / 2, L / 2, true); ctx.restore();
+  }
+}
+function drawCracks() {                             // after the ground: fissures open in it
+  if (!cracks.length || quakeK <= 0) return;
+  const dark = mixHex(C.sandDark, "#140c04", 0.75);
+  ctx.fillStyle = dark;
+  for (const c of cracks) {
+    const X = c.gx - dist;
+    if (X < -20 || X > W + 20) continue;
+    const n = c.pts.length - 1;
+    for (let j = 0; j < n; j++) {
+      const [x0, y0] = c.pts[j], [x1, y1] = c.pts[j + 1], wd = Math.max(1, Math.round(c.w * quakeK * (1 - j / n)));
+      for (let s = 0, m = Math.ceil(y1 - y0); s <= m; s++) {
+        const k = s / Math.max(1, m);
+        ctx.fillRect(Math.round(X + x0 + (x1 - x0) * k - wd / 2), Math.round(SKY + y0 + (y1 - y0) * k), wd, 1);
+      }
+    }
+  }
+}
+function drawRocks() {
+  if (!rocks.length) return;
+  ctx.fillStyle = tint(mixHex("#6b6158", C.skyD, 0.15), skyDk());
+  for (const r of rocks) ctx.fillRect(Math.round(r.x), Math.round(r.y), r.s, r.s);
+}
+function drawQuakeDust() {                          // the air thick with dust after the big one
+  if (!quake || !quake.fell) return;
+  const k = Math.exp(-(quake.t - QUAKE.rumble) / 3) + 0.4 * quake.after / 1.2;
+  if (k < 0.02) return;
+  ctx.fillStyle = "rgba(180,140,100," + Math.min(0.3, 0.22 * k).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY);
+}
+
 /* ---------- a power line on poles, just in front of the near hills: the wires sway in the wind,
    small birds sit along it (and scatter for the hawk or the thunder), and now and then
    the lightning finds it. ---------- */
@@ -2691,14 +2844,20 @@ function wireSway(k, i) {                           // how far span k's wire i i
   const f = 0.6 + 0.35 * hash1(k * 3 + i), ph = 6.283 * hash1(k * 5 + i * 2);
   return [a * Math.sin(airClock * f * 6.283 + ph), 0.35 * a * Math.sin(airClock * 2.3 * 6.283 * f + ph * 1.7)];
 }
-function wireShape(k, i) {                          // span k (pole k to k+1), wire i: its ends, its sag now, its gallop
-  const w = WIRES[i], [s, g] = wireSway(k, i);
-  return [SKY - POLE.h + w.dy, w.sag + 1.5 * hash1(k * 9 + i) + s, g];
+function poleTilt(k) { return quakeK * (hash1(k * 6.1 + 0.3) * 2 - 1) * 0.42; }   // splayed by the quake
+function attach(k, i) {                             // where wire i meets pole k, the pole leaning on its foot
+  const w = WIRES[i], a = poleTilt(k), ly = -POLE.h + w.dy, c = Math.cos(a), s = Math.sin(a);
+  return [poleX(k) + w.dx * c - ly * s, SKY + w.dx * s + ly * c];
 }
-function wireAt(sh, u) { return sh[0] + 4 * u * (1 - u) * sh[1] + sh[2] * Math.sin(6.283 * u); }
+function wireShape(k, i) {                          // span k (pole k to k+1), wire i: its ends, its sag now, its gallop
+  const w = WIRES[i], [s, g] = wireSway(k, i), A = attach(k, i), B = attach(k + 1, i);
+  return [A[0], A[1], B[0], B[1], w.sag + 1.5 * hash1(k * 9 + i) + s + 10 * quakeK, g];
+}
+function wireAt(sh, u) { return sh[1] + (sh[3] - sh[1]) * u + 4 * u * (1 - u) * sh[4] + sh[5] * Math.sin(6.283 * u); }
+const snapped = (k, i) => quakeK > 0.3 && i === 2 && hash1(k * 8.3) < 0.3;   // the phone line broke here
 function wireY(k, i, u) { return wireAt(wireShape(k, i), u); }
 function perchers(k) {                              // where the birds sit on span k: [wire, u, facing left]
-  if (perchGone.has(k) || ts.I > 0.35 || !spanOn(k) || hash1(k * 11.7) < 0.45) return [];
+  if (perchGone.has(k) || ts.I > 0.35 || quakeK > 0.01 || !spanOn(k) || hash1(k * 11.7) < 0.45) return [];
   const out = [], n = 1 + ((hash1(k * 3.1) * 4) | 0);
   for (let j = 0; j < n; j++) out.push([(hash1(k * 13 + j) * 3) | 0, 0.12 + 0.76 * hash1(k * 17 + j * 5), hash1(k * 19 + j) < 0.5]);
   return out;
@@ -2748,15 +2907,22 @@ function poleCols() {
 }
 function drawPoles() {                              // behind the haze and the shade, so it sits back in the scene
   if (FLAIR_MUL <= 0) return;
-  const [k0, k1] = poleRange(), P = poleCols(), T = SKY - POLE.h, snow = SFX.snow > 0.5 && snowD > 1;
+  const [k0, k1] = poleRange(), P = poleCols(), snow = SFX.snow > 0.5 && snowD > 1;
   const zk = lineZap && lineZap.t < 0.5 && ((lineZap.t * 14) | 0) % 2 === 0 ? lineZap.k : null;   // the struck span flickers white
   for (let k = k0; k <= k1; k++) {                  // the wires first, the poles over their ends
     if (!spanOn(k)) continue;
     for (let i = 0; i < WIRES.length; i++) {
-      const xa = poleX(k) + WIRES[i].dx, xb = xa + POLE.gap;
       ctx.fillStyle = zk !== null && Math.abs(k - zk) <= 1 && i < 2 ? "#eaf2ff" : P.wire;
-      const sh = wireShape(k, i);
-      for (let x = Math.max(-1, xa); x <= Math.min(W, xb); x++) ctx.fillRect(x, Math.round(wireAt(sh, (x - xa) / POLE.gap)), 1, 1);
+      const sh = wireShape(k, i), xa = Math.round(sh[0]), xb = Math.round(sh[2]);
+      if (snapped(k, i)) {                          // two loose ends hanging from the poles
+        const d = 30 * quakeK, sw = Math.sin(airClock * 2 + k) * 3;
+        for (let t = 0; t <= 1; t += 0.03) {
+          ctx.fillRect(Math.round(sh[0] + (8 + sw) * t), Math.round(sh[1] + d * t * t), 1, 1);
+          ctx.fillRect(Math.round(sh[2] - (8 - sw) * t), Math.round(sh[3] + d * t * t), 1, 1);
+        }
+        continue;
+      }
+      for (let x = Math.max(-1, xa); x <= Math.min(W, xb); x++) ctx.fillRect(x, Math.round(wireAt(sh, (x - xa) / Math.max(1, xb - xa))), 1, 1);
     }
     for (const [i, u, left] of perchers(k)) {
       const x = poleX(k) + WIRES[i].dx + u * POLE.gap;
@@ -2765,8 +2931,9 @@ function drawPoles() {                              // behind the haze and the s
   }
   for (let k = k0; k <= k1; k++) {
     if (!poleOn(k)) continue;
-    const X = poleX(k);
-    if (X < -12 || X > W + 12) continue;
+    if (poleX(k) < -40 || poleX(k) > W + 40) continue;
+    ctx.save(); ctx.translate(poleX(k), SKY); ctx.rotate(poleTilt(k));   // drawn at its foot, leaning if the ground shook
+    const X = 0, T = -POLE.h;
     ctx.fillStyle = P.pole; ctx.fillRect(X - 1, T, 3, POLE.h);
     ctx.fillStyle = P.lit; ctx.fillRect(X - 1, T, 1, POLE.h);
     ctx.fillStyle = P.arm; ctx.fillRect(X - 9, T + 3, 20, 2);
@@ -2774,7 +2941,8 @@ function drawPoles() {                              // behind the haze and the s
     ctx.fillStyle = P.ins; ctx.fillRect(X - 8, T + 1, 1, 2); ctx.fillRect(X + 9, T + 1, 1, 2); ctx.fillRect(X + 2, T + 13, 1, 1);
     if (hash1(k * 4.7) < 0.2) { ctx.fillStyle = P.can; ctx.fillRect(X + 2, T + 17, 4, 7); ctx.fillStyle = P.arm; ctx.fillRect(X + 2, T + 17, 4, 1); }   // a transformer
     if (snow) { ctx.fillStyle = "#f4f8fc"; ctx.fillRect(X - 9, T + 2, 20, 1); ctx.fillRect(X - 1, T - 1, 3, 1); }
-    if (!perchGone.has(k) && ts.I < 0.35 && hash1(k * 2.9) < 0.25) spr(PERCH, { D: P.bird }, X - 1, T - 3, hash1(k) < 0.5, 0);   // one on the pole top
+    if (!perchGone.has(k) && ts.I < 0.35 && quakeK <= 0.01 && hash1(k * 2.9) < 0.25) spr(PERCH, { D: P.bird }, X - 1, T - 3, hash1(k) < 0.5, 0);   // one on the pole top
+    ctx.restore();
   }
   for (const f of flyers) spr(((f.t * 9) | 0) % 2 ? FLY_UP : FLY_DN, { D: P.bird }, f.x - 1, f.y - 1, false, 0);
 }
@@ -2894,6 +3062,7 @@ function draw() {
   drawStrikes(0);                                // ...far lightning, behind the far hills, which stand out against it
   skyline();
   haze();
+  drawQuakeDust();
   skyLight();
   drawStrikes(1);                                // nearer: in front of the hills, behind the pipes
   drawStrikes(3);                                // onto the power line
@@ -2910,8 +3079,10 @@ function draw() {
     pipePart(p.x, p.bot, SKY, false);
     pipeSand(p);
   }
+  drawFallen();
   drawWater();
   ground();
+  drawCracks();
   drawGophers();
   drawHog();
   stormLow();
@@ -2936,6 +3107,8 @@ function draw() {
   if (ts.flash > 0) { ctx.fillStyle = "rgba(240,244,255," + (0.8 * ts.flash).toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
 
   outlineText(String(score), W / 2, 78, "#ffffff", F.big);
+  if (quake && quake.t < QUAKE.rumble + 3.5 && (airClock * 4 | 0) % 2 === 0) outlineText("EARTHQUAKE!", W / 2, 150, "#ffcf6a", F.big);
+  if (quake && quake.fell && quake.t > QUAKE.rumble + 1 && quake.t < QUAKE.rumble + 5) outlineText("FREE PASS", W / 2, 180, "#ffffff", F.hud);
   if (clearT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap sanded shut: the wind scours it all away
     outlineText(clearKind, W / 2, 120, clearKind === "THAW" ? "#9fe0ff" : "#ffe0a0", F.hud);
   txt("BEST " + best, 8, 16, "rgba(255,255,255,.9)", F.hud, "left");
@@ -2969,10 +3142,11 @@ function draw() {
 
   /* blit the scene to the display canvas, then draw scanlines in DEVICE
      pixels at an integer period (~1.5 logical px) so the spacing is exact. */
-  if (shakeT > 0) {                              // the crash shakes the whole screen
-    const a = BOOM.shake * DS * (shakeT / BOOM.shakeT) ** 1.5;
+  const qa = quakeShake(), ba = shakeT > 0 ? BOOM.shake * (shakeT / BOOM.shakeT) ** 1.5 : 0;
+  if (qa > 0 || ba > 0) {                        // a crash or a quake shakes the whole screen (a quake mostly side to side)
+    const a = Math.max(qa, ba) * DS, vy = ba >= qa ? 1 : 0.45;
     vctx.fillStyle = "#000"; vctx.fillRect(0, 0, cvs.width, cvs.height);
-    vctx.drawImage(buf, Math.round((Math.random() * 2 - 1) * a), Math.round((Math.random() * 2 - 1) * a), cvs.width, cvs.height);
+    vctx.drawImage(buf, Math.round((Math.random() * 2 - 1) * a), Math.round((Math.random() * 2 - 1) * a * vy), cvs.width, cvs.height);
   } else vctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
   const O = Math.max(3, Math.round(1.5 * DS));
   vctx.fillStyle = "rgba(0,0,0,.15)";

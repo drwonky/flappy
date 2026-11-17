@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r8</div>
+<div id="hud">seasons r9</div>
 
 <script>
 "use strict";
@@ -398,7 +398,7 @@ function reset() {
   score = 0; cooldown = 0; since = 1e9; aimOff = 0;
   dead = false; deadT = 0; flash = 0;
   frameIdx = 0; frameT = 0; wingHold = 0;
-  feathers = []; bolts = []; zapT = 0; zapOn = false; jit = [0, 0];
+  feathers = []; bolts = []; zapT = 0; zapOn = false; jit = [0, 0]; boom = null; shakeT = 0;
   falling = false; offT = 0; deathRot = 0;
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
@@ -447,7 +447,7 @@ function step(dt) {
     gspd = 0;                      // ...but the world no longer scrolls
     cloudX += -airU * 0.3 * dt;
     stepSmoke(dt); stepCover(dt); stepTrail(dt); stepRain(dt); stepStorm(dt);
-    stepAir(dt); stepFeathers(dt); stepDeath(dt); return;
+    stepAir(dt); stepFeathers(dt); stepBoom(dt); stepDeath(dt); return;
   }
   stepFeathers(dt);
   clock += dt;
@@ -530,20 +530,24 @@ function step(dt) {
   stepAir(dt);                     // after the pipes move, so nothing is left overlapping one
   stepTrail(dt);
 
-  if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(); return; }
+  if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(birdX, bird.y + (bird.y > SKY / 2 ? HH : -HH), "ground"); return; }
   for (const p of pipes) {
     if (birdX + HW > p.x && birdX - HW < p.x + PIPE_W &&
-        (bird.y - HH < p.top || bird.y + HH > p.bot)) { die(); return; }
+        (bird.y - HH < p.top || bird.y + HH > p.bot)) {
+      const face = birdX < p.x;                      // into the side of it, or onto a lip?
+      die(face ? p.x : birdX, face ? bird.y : bird.y < p.top + 1 ? p.top : p.bot, "pipe"); return;
+    }
   }
 }
 
 function birdRot() { return bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620); }
 
-function die() {
+function die(ix, iy, kind) {
   dead = true; deadT = 0; flash = 1;
+  if (!struck && !grabbed) startBoom(ix === undefined ? birdX : ix, iy === undefined ? bird.y : iy, kind || "pipe");
   deathRot = birdRot();
   bird.vy = 0;
-  spawnFeathers(birdX, bird.y, struck || grabbed ? 34 : 60);   // a crash is a real cloud of them
+  spawnFeathers(birdX, bird.y, struck || grabbed ? 34 : 100, struck || grabbed ? 1 : 1.5);   // a crash blows it apart
   const chips = Math.round(30 * Math.min(1, rime + glaze));   // and the ice shatters off
   for (let i = 0; i < chips; i++) {
     const a = Math.random() * Math.PI * 2, v = 90 + Math.random() * 220;
@@ -554,10 +558,10 @@ function die() {
 }
 
 const FEATHER_COLS = [C.birdY, C.birdY, C.birdD, C.birdC, "#ffffff"];
-function spawnFeathers(x, y, n = 34) {
+function spawnFeathers(x, y, n = 34, vm = 1) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2;
-    const v = 70 + Math.random() * 230;
+    const v = (70 + Math.random() * 230) * vm;
     feathers.push({
       x: x + (Math.random() * 2 - 1) * 8,
       y: y + (Math.random() * 2 - 1) * 6,
@@ -2589,6 +2593,100 @@ function drawHawk() {                               // in front of everything bu
   ctx.restore();
 }
 
+/* ---------- a crash: hit-stop, a starburst, shockwave rings, a fireball going to smoke,
+   sparks, bits of pipe (or ground) and a screen shake. Lightning and the hawk have their own. ---------- */
+const BOOM = { shake: 6, shakeT: 0.6, ring: 0.5, life: 1.6 };
+let boom = null, shakeT = 0;
+const BOOM_FIRE = ["#ffffff", "#fff6c0", "#ffe14a", "#ffb03a", "#ff7a2a"];
+function startBoom(x, y, kind) {
+  const b = { x, y, bx: birdX, by: bird.y, t: 0, kind, puffs: [], sparks: [], bits: [], spikes: [] };
+  for (let i = 0; i < 26; i++) {                     // the fireball: blobs flung out, slowing, growing, going to smoke
+    const a = Math.random() * 6.283, v = 40 + Math.random() * 150;
+    b.puffs.push({ x: b.bx, y: b.by, vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.8 - 20, r: 5 + Math.random() * 6,
+                   g: 14 + Math.random() * 16, d: Math.random() * 0.08, c: BOOM_FIRE[(Math.random() * BOOM_FIRE.length) | 0] });
+  }
+  for (let i = 0; i < 34; i++) {                     // sparks
+    const a = Math.random() * 6.283, v = 160 + Math.random() * 300;
+    b.sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: 0.25 + Math.random() * 0.45 });
+  }
+  const cols = kind === "pipe" ? [C.pipeLt, C.pipeHi, C.pipeMid, C.pipeLo, C.pipeO] : [C.grass, C.grassDark, C.sand, C.sandDark];
+  for (let i = 0; i < 22; i++) {                     // bits of the thing it hit
+    const a = kind === "pipe" ? Math.PI + (Math.random() - 0.5) * 2.4 : -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
+    const v = 90 + Math.random() * 230;
+    b.bits.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80, s: 2 + (Math.random() * 3 | 0), c: cols[(Math.random() * cols.length) | 0] });
+  }
+  for (let i = 0; i < 14; i++) b.spikes.push(i % 2 ? 0.45 + Math.random() * 0.2 : 0.8 + Math.random() * 0.3);
+  boom = b; shakeT = BOOM.shakeT;
+}
+function stepBoom(dt) {
+  shakeT = Math.max(0, shakeT - dt);
+  if (!boom) return;
+  const b = boom; b.t += dt;
+  const drag = Math.exp(-3.5 * dt);
+  for (const p of b.puffs) { if (b.t < p.d) continue; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= drag; p.vy = p.vy * drag - 14 * dt; p.r += p.g * dt; }
+  for (const p of b.sparks) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt; p.vx *= Math.exp(-dt); }
+  for (const p of b.bits) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; }
+  if (b.t > BOOM.life) boom = null;
+}
+function ring(cx, cy, r, w, col) {                   // a pixel ring, 2px blocks
+  ctx.fillStyle = col;
+  const n = Math.max(12, Math.round(r * 1.6));
+  for (let i = 0; i < n; i++) {
+    const a = i / n * 6.283;
+    ctx.fillRect(Math.round((cx + Math.cos(a) * r) / 2) * 2 - (w >> 1), Math.round((cy + Math.sin(a) * r) / 2) * 2 - (w >> 1), w, w);
+  }
+}
+function drawBoomBack() {                             // behind the bird: rings, fireball and smoke
+  const b = boom;
+  if (!b) return;
+  const t = b.t;
+  for (const [d, sc, col, w] of [[0, 1, "255,255,255", 4], [0.07, 0.7, "255,225,74", 2]]) {
+    const u = (t - d) / BOOM.ring;
+    if (u <= 0 || u >= 1) continue;
+    ctx.globalAlpha = (1 - u) ** 1.3;
+    ring(b.x, b.y, 6 + 120 * sc * (1 - (1 - u) ** 3), w, "rgb(" + col + ")");
+  }
+  for (const p of b.puffs) {
+    if (t < p.d) continue;
+    const u = Math.min(1, (t - p.d) / (BOOM.life - 0.2)), heat = Math.max(0, 1 - u * 1.7);
+    const col = heat > 0 ? mixHex(p.c, "#5a5048", 1 - heat) : mixHex("#5a5048", "#9a948c", Math.min(1, (u - 0.59) * 2.5));
+    const r = Math.round(p.r / 2) * 2, x = Math.round(p.x / 2) * 2, y = Math.round(p.y / 2) * 2;
+    ctx.globalAlpha = heat > 0 ? 1 : 0.75 * (1 - u);
+    ctx.fillStyle = col;
+    ctx.fillRect(x - r, y - Math.round(r * 0.6), 2 * r, Math.round(r * 1.2));
+    ctx.fillRect(x - Math.round(r * 0.6), y - r, Math.round(r * 1.2), 2 * r);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawBoomFront() {                            // in front: the starburst, sparks, flying bits
+  const b = boom;
+  if (!b) return;
+  const t = b.t;
+  if (t < 0.16) {                                    // POW: a jagged star, white in yellow in orange
+    const k = 1 - t / 0.16, n = b.spikes.length;
+    for (const [sc, col] of [[1, "#ff7a2a"], [0.75, "#ffe14a"], [0.45, "#ffffff"]]) {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const a = i / n * 6.283 + 0.2, r = (14 + 30 * b.spikes[i]) * sc * (0.7 + 0.5 * k);
+        const x = b.x + Math.cos(a) * r, y = b.y + Math.sin(a) * r;
+        if (i) ctx.lineTo(Math.round(x), Math.round(y)); else ctx.moveTo(Math.round(x), Math.round(y));
+      }
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  for (const p of b.sparks) {
+    if (t > p.life) continue;
+    ctx.fillStyle = t < p.life * 0.5 ? "#fff6c0" : "#ffb03a";
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), 2, 2);
+    ctx.fillRect(Math.round(p.x - p.vx * 0.012), Math.round(p.y - p.vy * 0.012), 1, 1);   // a short tail
+  }
+  for (const p of b.bits) {
+    if (p.y > H + 10) continue;
+    px(p.x - 1, p.y - 1, p.s + 2, p.s + 2, C.ink); px(p.x, p.y, p.s, p.s, p.c);
+  }
+}
+
 function draw() {
   blendPalette();
   sky();
@@ -2631,11 +2729,13 @@ function draw() {
   drawTrail();
   drawBirdAura();
   drawSweat();
+  drawBoomBack();
   drawBird();
   drawHawk();
   drawDustLeaves(true);                          // the near leaves pass in front of the bird
   drawBolts();
   drawFeathers();
+  drawBoomFront();
   drawStrikes(2);                                // overhead: in front of everything
   if (ts.flash > 0) { ctx.fillStyle = "rgba(240,244,255," + (0.8 * ts.flash).toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
 
@@ -2674,7 +2774,11 @@ function draw() {
 
   /* blit the scene to the display canvas, then draw scanlines in DEVICE
      pixels at an integer period (~1.5 logical px) so the spacing is exact. */
-  vctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
+  if (shakeT > 0) {                              // the crash shakes the whole screen
+    const a = BOOM.shake * DS * (shakeT / BOOM.shakeT) ** 1.5;
+    vctx.fillStyle = "#000"; vctx.fillRect(0, 0, cvs.width, cvs.height);
+    vctx.drawImage(buf, Math.round((Math.random() * 2 - 1) * a), Math.round((Math.random() * 2 - 1) * a), cvs.width, cvs.height);
+  } else vctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
   const O = Math.max(3, Math.round(1.5 * DS));
   vctx.fillStyle = "rgba(0,0,0,.15)";
   for (let y = 0; y < cvs.height; y += O) vctx.fillRect(0, y, cvs.width, 1);

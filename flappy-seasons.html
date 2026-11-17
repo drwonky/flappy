@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r11</div>
+<div id="hud">seasons r12</div>
 
 <script>
 "use strict";
@@ -708,11 +708,12 @@ function stepStorm(dt) {
     const r = ts.D + (Math.random() - 0.5) * 0.3;
     const layer = r > 0.6 ? 0 : r > 0.22 ? 1 : 2;
     ts.next = randIn(layer === 2 ? [0.6, 1.5] : [0.35, 1.2]);   // near strikes are spaced out: never 3 flashes a second
-    strike(layer);
+    const q = layer === 1 && Math.random() < POLE.wireP ? lineTarget() : null;
+    strike(q ? 3 : layer, q);                         // the line on its poles draws some of the mid strikes
   }
   for (const s of strikes) {
     s.age += dt;
-    s.ox -= gspd * [0.06, 0.14, 1][s.layer] * dt;     // they stay put in their layer as the world scrolls past
+    s.ox -= gspd * [0.06, 0.14, 1, POLE.p][s.layer] * dt;     // they stay put in their layer as the world scrolls past
     if (!s.re2 && s.age > 0.13) { s.re2 = true; if (s.layer === 2) ts.flash = Math.max(ts.flash, 0.55); else ts.sky = Math.max(ts.sky, 0.5 * s.fl); }
   }
   strikes = strikes.filter(s => s.age < 0.45);
@@ -730,22 +731,26 @@ function boltPath(x0, y0, x1, y1, jag) {           // a jagged run from the clou
   pts.push([x1, y1]);
   return pts;
 }
-function strike(layer) {
+function strike(layer, q) {
+  const lv = layer === 3 ? 1 : layer;               // the line is struck like the mid layer
   const L = [{ y0: [SKY - 190, SKY - 130], y1: [SKY - 34, SKY - 26], jag: 4, fl: 0.25 },   // far: low on the horizon, behind the far hills
              { y0: [8, 40], y1: [SKY - 16, SKY - 12], jag: 9, fl: 0.6 },       // mid: onto the near hills
-             { y0: [-6, -4], y1: [0, 0], jag: 13, fl: 1 }][layer];             // near: right here
+             { y0: [-6, -4], y1: [0, 0], jag: 13, fl: 1 },                     // near: right here
+             { y0: [4, 30], y1: [0, 0], jag: 8, fl: 0.8 }][layer];             // the power line
+  if (layer === 3 && !q) return;
   let x1 = 10 + Math.random() * (W - 20), y1 = randIn(L.y1);
   const zap = layer === 2 && !dead && Math.random() < TSTORM.zapP;
   if (layer === 2) y1 = SKY - Math.max(groundCoverH(x1), waterD);
   if (zap) { x1 = birdX; y1 = bird.y; }
+  if (q) { x1 = q.x; y1 = q.y; }
   const x0 = x1 + (Math.random() * 2 - 1) * 40;
   const main = boltPath(x0, randIn(L.y0), x1, y1, L.jag), branches = [];
-  const nb = 1 + ((Math.random() * (layer + 2)) | 0);
+  const nb = 1 + ((Math.random() * (lv + 2)) | 0);
   for (let b = 0; b < nb; b++) {                    // forks that die out in mid air
     let [x, y] = main[1 + ((Math.random() * (main.length - 2)) | 0)];
     const sd = sgn(), br = [[x, y]];
     for (let i = 0, n = 2 + ((Math.random() * 3) | 0); i < n; i++) {
-      x += sd * (4 + Math.random() * 8) * (0.6 + layer * 0.3); y += (5 + Math.random() * 9) * (0.6 + layer * 0.3);
+      x += sd * (4 + Math.random() * 8) * (0.6 + lv * 0.3); y += (5 + Math.random() * 9) * (0.6 + lv * 0.3);
       br.push([x, y]);
     }
     branches.push(br);
@@ -756,6 +761,7 @@ function strike(layer) {
     for (let i = 0; i < 10; i++) spawnDust(x1 + (Math.random() * 2 - 1) * 6, y1 - 1, -60 - Math.random() * 90, Math.random() < 0.5 ? "#fff6c0" : "#ffffff");
     if (zap) { struck = true; die(); }               // ...and this one found the bird
   } else ts.sky = Math.max(ts.sky, L.fl);
+  if (q) zapLine(q);
 }
 function stepDisco(dt) { if (disco && (disco.t -= dt) <= 0) endDisco(); }
 function setSeasonLen(len, fade) {                 // same point in the year, a different pace
@@ -1653,7 +1659,7 @@ function drawStrikes(layer) {                     // glow, then the white-hot co
     if (s.layer !== layer) continue;
     const a = s.age;
     if (!(a < 0.07 || (a > 0.12 && a < 0.19) || (a > 0.27 && a < 0.32))) continue;   // it flickers: stroke, re-strike
-    const g = [2, 3, 5][layer], c = [1, 1, 2][layer], ox = Math.round(s.ox);
+    const g = [2, 3, 5, 3][layer], c = [1, 1, 2, 1][layer], ox = Math.round(s.ox);
     const run = (pts, w, col) => { for (let i = 1; i < pts.length; i++)
       boltLine(Math.round(pts[i - 1][0]) + ox, Math.round(pts[i - 1][1]), Math.round(pts[i][0]) + ox, Math.round(pts[i][1]), w, col); };
     ctx.globalAlpha = layer === 0 ? 0.30 : 0.45;
@@ -1728,6 +1734,7 @@ function skyline() {                              // green hills (snow-capped in
     }
   }
   ctx.globalAlpha = 1;
+  drawPoles();                                    // the power line, in front of the hills
 }
 
 /* isTop is passed in, never inferred: inferring it from position mis-caps
@@ -2135,7 +2142,7 @@ function spr(rows, pal, x, y, flip, k, clipY, s = 1) {   // a cell is s logical 
 function stepFlair(dt) {
   if (FLAIR_MUL > 0) for (const k in flNext)
     if ((flNext[k] -= dt * FLAIR_MUL) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
-  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt);
+  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt); stepPoles(dt);
 }
 function trySpawn(k) {
   const r = Math.random(), has = kind => flocks.some(f => f.kind === kind);
@@ -2489,6 +2496,7 @@ function hawkToward(h, x, y, v, dt) {               // fly straight at a point; 
   h.x += dx / d * v * dt; h.y += dy / d * v * dt; return false;
 }
 function startStoop(h) {
+  scarePerch();                                    // the small birds know that shape
   h.st = "stoop"; h.u = 0; h.P0 = [h.x, h.y];
   h.grab = Math.random() < HAWK.grabP;
   if (h.grab) { h.P1 = [birdX, bird.y - hawkHold(HAWK.near)]; h.P2 = [birdX - 170, 30]; }
@@ -2516,6 +2524,7 @@ function findPrey() {                               // a groundhog or a gopher u
   return null;
 }
 function stoopAt(h, prey) {
+  scarePerch();
   if (prey.kind === "hog") { hog.prey = true; hog.sunny = false; hog.dur = 99; } else prey.g.prey = true;
   const q = preyXY(prey);
   h.st = "stoop"; h.u = 0; h.P0 = [h.x, h.y]; h.grab = false; h.prey = prey;
@@ -2604,6 +2613,119 @@ function drawHawk() {                               // in front of everything bu
     ctx.fillStyle = tint(HAWK_PAL[ch], k); ctx.fillRect(c * q - 7 * q, r * q - 4.5 * q, q, q);
   }
   ctx.restore();
+}
+
+/* ---------- a power line on poles, just in front of the near hills: the wires sway in the wind,
+   small birds sit along it (and scatter for the hawk or the thunder), and now and then
+   the lightning finds it. It comes and goes in runs of poles. ---------- */
+const POLE = { p: 0.4, gap: 118, h: 58, run: 10, on: 0.65, wireP: 0.35, fade: 0.3 };   // parallax, spacing, height, poles per run, share of runs, share of mid strikes taken by the line, haze
+const WIRES = [{ dx: -8, dy: 1, sag: 5 }, { dx: 9, dy: 1, sag: 9 }, { dx: 2, dy: 13, sag: 11 }];   // two on the crossarm, a phone line lower down
+const PERCH = ["..DD", "DDDD", "D.D."], FLY_UP = ["D.D", ".D."], FLY_DN = [".D.", "D.D"];
+let perchGone = new Set(), flyers = [], lineZap = null, lineSparks = [];
+function poleOn(k) { return FLAIR_MUL > 0 && hash1(Math.floor(k / POLE.run) * 7.3 + 1.1) < POLE.on; }
+function poleX(k) { return Math.round(k * POLE.gap - dist * POLE.p) + 20; }
+function poleRange() { const k0 = Math.floor((dist * POLE.p - 70) / POLE.gap); return [k0, k0 + Math.ceil((W + 100) / POLE.gap) + 1]; }
+function spanOn(k) { return poleOn(k) && poleOn(k + 1); }
+function wireSway(k, i) {                           // how far span k's wire i is blown off its rest sag, px
+  let a = Math.min(6, 0.07 * Math.abs(airU) + 4 * gustE + 2.5 * ts.I);
+  if (lineZap && Math.abs(k - lineZap.k) <= 1) a += 5 * Math.exp(-2 * lineZap.t);   // jolted by the strike
+  const f = 0.6 + 0.35 * hash1(k * 3 + i), ph = 6.283 * hash1(k * 5 + i * 2);
+  return [a * Math.sin(airClock * f * 6.283 + ph), 0.35 * a * Math.sin(airClock * 2.3 * 6.283 * f + ph * 1.7)];
+}
+function wireShape(k, i) {                          // span k (pole k to k+1), wire i: its ends, its sag now, its gallop
+  const w = WIRES[i], [s, g] = wireSway(k, i);
+  return [SKY - POLE.h + w.dy, w.sag + 1.5 * hash1(k * 9 + i) + s, g];
+}
+function wireAt(sh, u) { return sh[0] + 4 * u * (1 - u) * sh[1] + sh[2] * Math.sin(6.283 * u); }
+function wireY(k, i, u) { return wireAt(wireShape(k, i), u); }
+function perchers(k) {                              // where the birds sit on span k: [wire, u, facing left]
+  if (perchGone.has(k) || ts.I > 0.35 || !spanOn(k) || hash1(k * 11.7) < 0.45) return [];
+  const out = [], n = 1 + ((hash1(k * 3.1) * 4) | 0);
+  for (let j = 0; j < n; j++) out.push([(hash1(k * 13 + j) * 3) | 0, 0.12 + 0.76 * hash1(k * 17 + j * 5), hash1(k * 19 + j) < 0.5]);
+  return out;
+}
+function scarePerch() {                             // everyone off the wire at once
+  const [k0, k1] = poleRange();
+  for (let k = k0; k <= k1; k++) {
+    for (const [i, u] of perchers(k)) {
+      const x0 = poleX(k) + WIRES[i].dx, x = x0 + u * POLE.gap;
+      if (x < -4 || x > W + 4) continue;
+      flyers.push({ x, y: wireY(k, i, u) - 2, vx: sgn() * (25 + Math.random() * 45), vy: -(45 + Math.random() * 45), t: Math.random() });
+    }
+    perchGone.add(k);
+  }
+}
+function lineTarget() {                             // a pole top or a point on a wire, well on screen
+  const [k0, k1] = poleRange(), ks = [];
+  for (let k = k0; k <= k1; k++) if (spanOn(k) && poleX(k) > 30 && poleX(k) < W - 30) ks.push(k);
+  if (!ks.length) return null;
+  const k = ks[(Math.random() * ks.length) | 0];
+  if (Math.random() < 0.5) return { k, x: poleX(k) + WIRES[0].dx, y: SKY - POLE.h };
+  const i = (Math.random() * 2) | 0, u = 0.2 + 0.6 * Math.random();
+  return { k, x: poleX(k) + WIRES[i].dx + u * POLE.gap, y: wireY(k, i, u) };
+}
+function zapLine(q) {                               // the strike lands on the line: a flash, sparks, a jolt down the wires
+  lineZap = { k: q.k, x: q.x + dist * POLE.p, y: q.y, t: 0 };
+  for (let i = 0; i < 26; i++) {
+    const a = -Math.PI * Math.random(), v = 40 + Math.random() * 90;
+    lineSparks.push({ x: q.x, y: q.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.8, t: 0, life: 0.5 + Math.random() * 0.8,
+                      col: ["#ffffff", "#fff3a0", "#ffc040", "#ff8a30"][(Math.random() * 4) | 0] });
+  }
+  scarePerch();
+}
+function stepPoles(dt) {
+  const scroll = gspd * POLE.p * dt;
+  for (const f of flyers) { f.t += dt; f.x += f.vx * dt - scroll; f.y += f.vy * dt; f.vy *= Math.exp(-0.6 * dt); }
+  flyers = flyers.filter(f => f.y > -6 && f.x > -8 && f.x < W + 8);
+  for (const s of lineSparks) { s.t += dt; s.x += s.vx * dt - scroll; s.y += s.vy * dt; s.vy += 220 * dt; s.vx *= Math.exp(-1.5 * dt); }
+  lineSparks = lineSparks.filter(s => s.t < s.life && s.y < SKY);
+  if (lineZap && (lineZap.t += dt) > 2) lineZap = null;
+  const k0 = poleRange()[0];
+  for (const k of perchGone) if (k < k0 - 1) perchGone.delete(k);
+}
+function poleCols() {
+  const dk = skyDk(), m = c => tint(mixHex(c, C.skyD, POLE.fade), dk);
+  return { pole: m("#4a3626"), lit: m("#6e5238"), arm: m("#3b2c20"), ins: m("#b8c6cc"), wire: m("#242226"), bird: m("#26222a"), can: m("#76808a") };
+}
+function drawPoles() {                              // behind the haze and the shade, so it sits back in the scene
+  if (FLAIR_MUL <= 0) return;
+  const [k0, k1] = poleRange(), P = poleCols(), T = SKY - POLE.h, snow = SFX.snow > 0.5 && snowD > 1;
+  const zk = lineZap && lineZap.t < 0.5 && ((lineZap.t * 14) | 0) % 2 === 0 ? lineZap.k : null;   // the struck span flickers white
+  for (let k = k0; k <= k1; k++) {                  // the wires first, the poles over their ends
+    if (!spanOn(k)) continue;
+    for (let i = 0; i < WIRES.length; i++) {
+      const xa = poleX(k) + WIRES[i].dx, xb = xa + POLE.gap;
+      ctx.fillStyle = zk !== null && Math.abs(k - zk) <= 1 && i < 2 ? "#eaf2ff" : P.wire;
+      const sh = wireShape(k, i);
+      for (let x = Math.max(-1, xa); x <= Math.min(W, xb); x++) ctx.fillRect(x, Math.round(wireAt(sh, (x - xa) / POLE.gap)), 1, 1);
+    }
+    for (const [i, u, left] of perchers(k)) {
+      const x = poleX(k) + WIRES[i].dx + u * POLE.gap;
+      spr(PERCH, { D: P.bird }, x - 2, wireY(k, i, u) - 3, left, 0);
+    }
+  }
+  for (let k = k0; k <= k1; k++) {
+    if (!poleOn(k)) continue;
+    const X = poleX(k);
+    if (X < -12 || X > W + 12) continue;
+    ctx.fillStyle = P.pole; ctx.fillRect(X - 1, T, 3, POLE.h);
+    ctx.fillStyle = P.lit; ctx.fillRect(X - 1, T, 1, POLE.h);
+    ctx.fillStyle = P.arm; ctx.fillRect(X - 9, T + 3, 20, 2);
+    ctx.fillRect(X - 5, T + 5, 1, 2); ctx.fillRect(X + 5, T + 5, 1, 2);     // braces
+    ctx.fillStyle = P.ins; ctx.fillRect(X - 8, T + 1, 1, 2); ctx.fillRect(X + 9, T + 1, 1, 2); ctx.fillRect(X + 2, T + 13, 1, 1);
+    if (hash1(k * 4.7) < 0.2) { ctx.fillStyle = P.can; ctx.fillRect(X + 2, T + 17, 4, 7); ctx.fillStyle = P.arm; ctx.fillRect(X + 2, T + 17, 4, 1); }   // a transformer
+    if (snow) { ctx.fillStyle = "#f4f8fc"; ctx.fillRect(X - 9, T + 2, 20, 1); ctx.fillRect(X - 1, T - 1, 3, 1); }
+    if (!perchGone.has(k) && ts.I < 0.35 && hash1(k * 2.9) < 0.25) spr(PERCH, { D: P.bird }, X - 1, T - 3, hash1(k) < 0.5, 0);   // one on the pole top
+  }
+  for (const f of flyers) spr(((f.t * 9) | 0) % 2 ? FLY_UP : FLY_DN, { D: P.bird }, f.x - 1, f.y - 1, false, 0);
+}
+function drawLineZap() {                            // in front of the haze: the arc and its sparks are bright
+  if (lineZap && lineZap.t < 0.35) {
+    const x = Math.round(lineZap.x - dist * POLE.p), y = Math.round(lineZap.y), r = Math.round(2 + 5 * (1 - lineZap.t / 0.35));
+    if (((lineZap.t * 20) | 0) % 3 !== 2) { disc(x, y, r + 3, "rgba(160,190,255,.45)"); disc(x, y, r, "#ffffff"); }
+  }
+  for (const s of lineSparks) { const z = s.t < 0.3 * s.life ? 2 : 1; ctx.fillStyle = s.col; ctx.globalAlpha = Math.max(0, 1 - s.t / s.life); ctx.fillRect(Math.round(s.x), Math.round(s.y), z, z); }
+  ctx.globalAlpha = 1;
 }
 
 /* ---------- a crash: hit-stop, a starburst, shockwave rings, a fireball going to smoke,
@@ -2715,6 +2837,8 @@ function draw() {
   haze();
   skyLight();
   drawStrikes(1);                                // nearer: in front of the hills, behind the pipes
+  drawStrikes(3);                                // onto the power line
+  drawLineZap();
   drawCacti();
   for (const c of cacti) drawPecker(c);
   drawChips();

@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r10</div>
+<div id="hud">seasons r11</div>
 
 <script>
 "use strict";
@@ -2756,10 +2756,10 @@ function draw() {
   if (clearT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap sanded shut: the wind scours it all away
     outlineText(clearKind, W / 2, 120, clearKind === "THAW" ? "#9fe0ff" : "#ffe0a0", F.hud);
   txt("BEST " + best, 8, 16, "rgba(255,255,255,.9)", F.hud, "left");
-  txt("SPD " + Math.round(speed) + " GAP " + Math.round(gap), W - 8, 16,
-      "rgba(255,255,255,.9)", F.hud, "right");
+  ctx.save(); ctx.translate(0, -18);             // the right-hand column moves up into the first row
   drawWindHud();
   if (!dead || offT <= 0) drawHeatHud();
+  ctx.restore();
   drawSeasonHud();
 
   const k = 1 - Math.exp(-score / TAU);
@@ -2770,7 +2770,6 @@ function draw() {
   if (cooldown > 0 && !dead) {
     ctx.fillStyle = "rgba(255,255,255,.55)";
     ctx.fillRect(8, 30, 96 * (cooldown / COOLD), 2);
-    txt("WING COOLDOWN", 8, 48, "rgba(255,255,255,.75)", F.hud, "left");
   }
 
   if (dead) {

@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r13</div>
+<div id="hud">seasons r14</div>
 
 <script>
 "use strict";
@@ -711,6 +711,10 @@ function stepStorm(dt) {
     const q = layer === 1 && Math.random() < POLE.wireP ? lineTarget() : null;
     strike(q ? 3 : layer, q);                         // the line on its poles draws some of the mid strikes
   }
+  if (ts.on && ts.I > 0.4 && ts.p > 0.05 && ts.p < 0.9) {   // anything up out of the ground draws the lightning
+    const c = critterUp();
+    if (c && !c.crit.zapTried) { c.crit.zapTried = true; if (Math.random() < FRY.p) { strike(2, c); ts.next = Math.max(ts.next, 0.8); } }
+  }
   for (const s of strikes) {
     s.age += dt;
     s.ox -= gspd * [0.06, 0.14, 1, POLE.p][s.layer] * dt;     // they stay put in their layer as the world scrolls past
@@ -739,7 +743,7 @@ function strike(layer, q) {
              { y0: [4, 30], y1: [0, 0], jag: 8, fl: 0.8 }][layer];             // the power line
   if (layer === 3 && !q) return;
   let x1 = 10 + Math.random() * (W - 20), y1 = randIn(L.y1);
-  const zap = layer === 2 && !dead && Math.random() < TSTORM.zapP;
+  const zap = !q && layer === 2 && !dead && Math.random() < TSTORM.zapP;
   if (layer === 2) y1 = SKY - Math.max(groundCoverH(x1), waterD);
   if (zap) { x1 = birdX; y1 = bird.y; }
   if (q) { x1 = q.x; y1 = q.y; }
@@ -761,7 +765,8 @@ function strike(layer, q) {
     for (let i = 0; i < 10; i++) spawnDust(x1 + (Math.random() * 2 - 1) * 6, y1 - 1, -60 - Math.random() * 90, Math.random() < 0.5 ? "#fff6c0" : "#ffffff");
     if (zap) { struck = true; die(); }               // ...and this one found the bird
   } else ts.sky = Math.max(ts.sky, L.fl);
-  if (q) zapLine(q);
+  if (q && q.crit) q.crit.fry = 0;                // a groundhog or a gopher: fried
+  else if (q) zapLine(q);
 }
 function stepDisco(dt) { if (disco && (disco.t -= dt) <= 0) endDisco(); }
 function setSeasonLen(len, fade) {                 // same point in the year, a different pace
@@ -2141,7 +2146,7 @@ function spr(rows, pal, x, y, flip, k, clipY, s = 1) {   // a cell is s logical 
 /* ---------- scheduling ---------- */
 function stepFlair(dt) {
   if (FLAIR_MUL > 0) for (const k in flNext)
-    if ((flNext[k] -= dt * FLAIR_MUL) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
+    if ((flNext[k] -= dt * FLAIR_MUL * (k === "gopher" && ts.I > 0.4 ? 4 : 1)) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
   stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt); stepPoles(dt);
 }
 function trySpawn(k) {
@@ -2153,7 +2158,7 @@ function trySpawn(k) {
     case "geese":  if (has("geese") || r > 0.9 * (SW[0] + SW[2])) return false; flocks.push(makeGeese()); return true;
     case "flock":  if (has("flock") || r > 1 - 0.7 * SW[3]) return false; flocks.push(makeFlock()); return true;
     case "yeti":   if (yeti || r > SW[3]) return false; return !!(yeti = makeYeti());
-    case "hog":    if (hog || r > SW[0]) return false; hog = makeHog(); return true;
+    case "hog":    if (hog || r > Math.max(SW[0], 0.8 * ts.I)) return false;   // spring, or up to see the storm hog = makeHog(); return true;
     case "gopher": if (gophers.length || r > 1 - 0.5 * SW[3]) return false; gophers.push(makeGopher()); return true;
     case "hawk":   if (hawk || dead || !fineWeather()) return false; hawk = makeHawk(); return true;
   }
@@ -2354,7 +2359,8 @@ function makeHog() {
 function stepHog(dt) {
   if (!hog) return;
   const x = hog.gx - dist;
-  if (hog.t < 0) { if (x < W - 70) hog.t = 0; }    // its hole scrolls into view, then up it comes
+  if (hog.fry !== undefined) { if ((hog.fry += dt) > FRY.end) { hog.t = hog.dur + 1; hog.fry = undefined; } }   // fried: then down the hole
+  else if (hog.t < 0) { if (x < W - 70) hog.t = 0; }    // its hole scrolls into view, then up it comes
   else if (!hog.prey || hog.t < 0.6) hog.t += dt;   // frozen to the spot while the hawk comes down
   if (x < -30) hog = null;
 }
@@ -2364,6 +2370,7 @@ function drawHog() {                                // in front, on the ground, 
   px(x - 9, sy - 2, 4, 2, tint("#8a6a42", k)); px(x + 5, sy - 2, 4, 2, tint("#8a6a42", k));   // the dirt it threw up
   px(x - 6, sy - 1, 12, 2, tint("#3a2a1a", k));                                              // the hole
   if (t < 0 || t > d || hog.taken) return;
+  if (hog.fry !== undefined) { drawFried(HOG, HOG_X, x - 8, sy - 20, sy, hog.fry, 20); return; }
   const dive = hog.sunny && t > 1.2;                // it saw its shadow
   const up = dive ? 1 - smooth((t - 1.2) / 0.15) : smooth(Math.min(t / 0.25, (d - t) / 0.3));
   const y = sy - Math.round(20 * up), look = t > 0.35 && !dive ? Math.round(Math.sin(t * 7)) * 2 : 0;
@@ -2413,6 +2420,56 @@ function stepChips(dt) {
 }
 function drawChips() { for (const c of chips) px(c.x, c.y, 1, 1, c.col); }
 
+/* ---------- struck by lightning: the classic cartoon X-ray, skeleton and body flashing in turn,
+   then black and smoking, eyes wide, before it drops back down its hole ---------- */
+const FRY = { p: 0.85, flick: 1.1, sink: 2.4, end: 2.8 };   // chance a critter up in a storm is hit; the phases, s
+const HOG_X = ["..KKKK..", ".KWWWWK.", ".WKWWKW.", ".KWWWWK.", "..WKWK..",
+               ".KKWWKK.", "KWWWWWWK", ".KKWWKK.", ".KWWWWK.", ".KKWWKK."];
+const GOPHER_UP   = [".BBB.", "BEBEB", "BBNBB", ".BTB.", ".BLB.", "BBLBB", "BBLBB"];
+const GOPHER_UP_X = [".WWW.", "WKWKW", "WWKWW", ".WKW.", ".KWK.", "WWWWW", "KKWKK"];
+const XRAY_PAL = { K: "#1c2238", W: "#f4f8ff" };
+const ZAPLIT_PAL = { B: "#9fe6ff", L: "#e8fbff", E: "#141414", N: "#2a6a9a", T: "#ffffff", C: "#5aa8d0" };
+const CHAR_PAL = { B: "#2e2620", L: "#4a3e34", E: "#ffffff", N: "#1a1410", T: "#ffffff", C: "#1a1410" };
+const CHAR_BLINK = Object.assign({}, CHAR_PAL, { E: "#2e2620" });
+function critterUp() {                              // a groundhog or a gopher up out of the ground, on screen
+  if (hog && !hog.taken && !hog.prey && hog.fry === undefined && hog.t > 0.4 && hog.t < hog.dur - 0.5) {
+    const x = hog.gx - dist;
+    if (x > 16 && x < W - 16) return { crit: hog, x, y: SKY - groundCoverH(x) - 20 };
+  }
+  for (const g of gophers) if (g.mode === "peek" && !g.prey && g.fry === undefined && g.peek > 0.3 && g.peek < 0.9) {
+    const x = g.mound - dist;
+    if (x > 16 && x < W - 16) return { crit: g, x, y: SKY - groundCoverH(x) - 10 };
+  }
+  return null;
+}
+function drawFried(rows, xrows, x, y, sy, f, h) {   // x, y: its top left when fully up; h: how far up it stands
+  const sink = f < FRY.sink ? 0 : smooth((f - FRY.sink) / (FRY.end - FRY.sink));
+  y += Math.round(h * sink);
+  const w = rows[0].length * 2, cx = x + w / 2;
+  if (f < FRY.flick) {                              // the shock: skeleton, body, skeleton... and it shakes
+    const jx = Math.round((Math.random() * 2 - 1) * 1.5), jy = Math.round((Math.random() * 2 - 1));
+    if (((f * 16) | 0) % 2) spr(xrows, XRAY_PAL, x + jx, y + jy, false, 0, sy, 2);
+    else { disc(cx, y + rows.length, rows.length + 6, "rgba(140,210,255,.35)"); spr(rows, ZAPLIT_PAL, x + jx, y + jy, false, 0, sy, 2); }
+    ctx.fillStyle = "#dff4ff";                      // crackle round it
+    for (let i = 0; i < 5; i++) {
+      const a = Math.random() * 6.283, r = w * 0.6 + Math.random() * 5;
+      ctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(y + rows.length + Math.sin(a) * r), 1, 1);
+    }
+    return;
+  }
+  const blink = f > 1.75 && f < 1.85;               // a slow blink
+  spr(rows, blink ? CHAR_BLINK : CHAR_PAL, x, y, false, 0, sy, 2);
+  if (y + 2 < sy) {                                 // fur standing on end
+    ctx.fillStyle = "#2e2620";
+    for (let i = 0; i < 4; i++) ctx.fillRect(x + 1 + Math.round(i * (w - 3) / 3), y - 2 - (i % 2), 1, 2 + (i % 2));
+  }
+  for (let i = 0; i < 4; i++) {                     // wisps of smoke going up
+    const ph = (f * 14 + i * 6) % 22, a = Math.max(0, 0.5 * (1 - ph / 22) * (1 - sink));
+    ctx.fillStyle = "rgba(110,110,116," + a.toFixed(3) + ")";
+    ctx.fillRect(Math.round(cx - 3 + i * 2 + Math.sin(f * 4 + i) * 2), Math.round(y - 3 - ph), 2, 2);
+  }
+}
+
 /* ---------- gophers: a cutaway of the ground, a tunnel dug as you watch, and up for a look ---------- */
 const GOPHER = ["..BBBBB..", ".BBBBBBEB", "BBBBBBBBN", "BLLLLBBTB", ".BBBBBBB.", ".C.C.C.C."];
 const GOPHER_HEAD = [".BBB.", "BEBEB", "BBNBB", ".BTB."];
@@ -2439,7 +2496,8 @@ function stepGophers(dt) {
       if (g.turnY && g.y <= g.turnY) { g.mode = "dig"; g.ty = SKY + 90 + Math.random() * 8; g.wig = 30; g.up = 1e9; }   // thinks better of it
       else if (g.y <= SKY + 10) { g.y = SKY + 10; g.mode = "peek"; g.peek = 0; g.mound = g.gx; }
     } else if (g.mode === "peek") {
-      if (!g.prey && (g.peek += dt) > 1.2) g.mode = "gone";   // frozen to the spot while the hawk comes down
+      if (g.fry !== undefined) { if ((g.fry += dt) > FRY.end) g.mode = "gone"; }
+      else if (!g.prey && (g.peek += dt) > 1.2) g.mode = "gone";   // frozen to the spot while the hawk comes down
     }
     const last = g.tun[g.tun.length - 1];
     if (g.mode !== "gone" && (!last || Math.hypot(g.gx - last[0], g.y - last[1]) >= 2)) g.tun.push([g.gx, g.y]);
@@ -2461,7 +2519,8 @@ function drawGophers() {                            // after the ground, before 
     }
     if (g.mound !== undefined) {                    // a fresh heap of dirt on top
       const mx = Math.round(g.mound - dist), sy = Math.round(SKY - groundCoverH(mx));
-      if (g.mode === "peek") {
+      if (g.mode === "peek" && g.fry !== undefined) drawFried(GOPHER_UP, GOPHER_UP_X, mx - 5, sy - 14, sy, g.fry, 14);   // jolted up out of the hole
+      else if (g.mode === "peek") {
         const up = smooth(Math.min(g.peek / 0.2, (1.2 - g.peek) / 0.2)), look = ((g.peek * 3) | 0) % 2;
         spr(GOPHER_HEAD, GOPHER_PAL, mx - 5 + look * 2, sy - Math.round(10 * up), false, 0, sy, 2);
       }
@@ -2513,11 +2572,11 @@ function preyXY(p) {                                // where the animal on the g
   return g.mode === "peek" ? [g.mound - dist, SKY - groundCoverH(g.mound - dist) - 6] : null;
 }
 function findPrey() {                               // a groundhog or a gopher up out of its hole, well onto the screen
-  if (hog && !hog.taken && hog.t > 0.15 && hog.t < hog.dur - 0.4) {
+  if (hog && !hog.taken && hog.fry === undefined && hog.t > 0.15 && hog.t < hog.dur - 0.4) {
     const x = hog.gx - dist;
     if (x > 110 && x < W - 10) return { kind: "hog" };
   }
-  for (const g of gophers) if (g.mode === "peek" && g.peek < 0.5) {
+  for (const g of gophers) if (g.mode === "peek" && g.peek < 0.5 && g.fry === undefined) {
     const x = g.mound - dist;
     if (x > 110 && x < W - 10) return { kind: "gopher", g };
   }

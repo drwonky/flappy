@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r6</div>
+<div id="hud">seasons r7</div>
 
 <script>
 "use strict";
@@ -401,7 +401,7 @@ function reset() {
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; heatFx();
-  struck = false;
+  struck = false; grabbed = false;
   ramp(0); gspd = speed;
   firstPipes();
 }
@@ -410,8 +410,7 @@ function spawn(x = W + REACH) {
   const top = 30 + Math.random() * (SKY - 60 - gap);
   pipes.push({ x: x, top: top, bot: top + gap, passed: false,
                sf: 0.85 + Math.random() * 0.3,          // this pipe's share of the sand
-               cut: new Float32Array(SAND_COLS),        // where the bird has plowed through its heap
-               peck: peckFor() });                       // a woodpecker on it, some autumns
+               cut: new Float32Array(SAND_COLS) });      // where the bird has plowed through its heap
   aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
   if (SFX.desert > 0.5) spawnCactus(x + PIPE_W / 2 + speed * spaceSec / 2);     // half way to the next pipe, in the desert season
 }
@@ -608,6 +607,11 @@ function makeBolts() {
 
 function stepDeath(dt) {
   deadT += dt;
+  if (grabbed) {                                // carried off in the talons, struggling
+    if (hawk) { birdX = hawk.x; bird.y = hawk.y + 14; frameIdx = ((deadT * 14) | 0) % 4; }
+    else { offT += dt; if (offT > D_REST) reset(); }
+    return;
+  }
   if (deadT < D_FREEZE) return;                 // frozen in place
   if (deadT < D_ZAP) {                          // electrocution
     zapT -= dt;
@@ -1042,7 +1046,7 @@ function spawnCactus(x) {
   const h = 26 + Math.random() * 30, arms = [];
   if (Math.random() < 0.85) arms.push({ s: -1, y: 0.35 + Math.random() * 0.25, up: 6 + Math.random() * 10 });
   if (Math.random() < 0.7) arms.push({ s: 1, y: 0.25 + Math.random() * 0.3, up: 6 + Math.random() * 12 });
-  cacti.push({ x: x, h: Math.round(h), arms: arms });
+  cacti.push({ x: x, h: Math.round(h), arms: arms, peck: peckFor(Math.round(h), arms) });
 }
 
 /* ============================================================
@@ -1980,7 +1984,7 @@ function drawHeatHud() {                           // heat (or ice), spelled out
     txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
   }
   const wc = windCool(), c = cloudCover(), b = blazeK();
-  const air = ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
+  const air = ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : hawk && hawk.st !== "out" && !dead ? ["HAWK ABOUT", "#ffd27a"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
             : wc < 0.6 ? ["STILL AIR", "#ffc070"] : wc > 1.4 ? ["STRONG BREEZE", "#9fe0ff"] : ["BREEZE", "#cfe8f0"];
   txt(air[0], W - 8, 96, air[1], F.hud, "right");
   const fx = Math.round(100 * (1 - flapEff / FLAP));
@@ -2012,6 +2016,9 @@ function drawBird() {
   if (!dead) {
     ctx.translate(Math.round(birdX), Math.round(bird.y));
     ctx.rotate(birdRot());
+  } else if (grabbed) {
+    ctx.translate(Math.round(birdX), Math.round(bird.y));
+    ctx.rotate(0.25 * Math.sin(deadT * 22));
   } else if (!falling) {
     ctx.translate(Math.round(birdX) + jit[0], Math.round(bird.y) + jit[1]);
     ctx.rotate(deathRot);
@@ -2088,8 +2095,8 @@ function outlineText(s, x, y, col, font) {
    ============================================================ */
 const FLAIR_MUL = qnum("flair") !== null ? Math.max(0, qnum("flair")) : 1;
 const FL = { train: [35, 75], blimp: [45, 95], buzz: [11, 24], geese: [16, 34], flock: [18, 38],
-             yeti: [9, 18], hog: [7, 14], gopher: [6, 13], peck: 0.4 };   // s between sightings; peck = share of autumn pipes
-const flNext = { train: 14, blimp: 30, buzz: 6, geese: 10, flock: 16, yeti: 4, hog: 3, gopher: 4 };
+             yeti: [9, 18], hog: [7, 14], gopher: [45, 90], hawk: [30, 60], peck: 0.2 };   // s between sightings; peck = share of cacti
+const flNext = { train: 14, blimp: 30, buzz: 6, geese: 10, flock: 16, yeti: 4, hog: 3, gopher: 20, hawk: 25 };
 let train = null, blimp = null, flocks = [], yeti = null, hog = null, gophers = [], chips = [], puffs = [];
 const NEAR_P = 0.14;                                // the near hills' parallax
 function nearHillX(i) { return Math.round((((i * 40) - dist * NEAR_P) % (W + 60) + W + 60) % (W + 60) - 30); }
@@ -2122,7 +2129,7 @@ function spr(rows, pal, x, y, flip, k, clipY, s = 1) {   // a cell is s logical 
 function stepFlair(dt) {
   if (FLAIR_MUL > 0) for (const k in flNext)
     if ((flNext[k] -= dt * FLAIR_MUL) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
-  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt);
+  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt);
 }
 function trySpawn(k) {
   const r = Math.random(), has = kind => flocks.some(f => f.kind === kind);
@@ -2134,7 +2141,8 @@ function trySpawn(k) {
     case "flock":  if (has("flock") || r > 1 - 0.7 * SW[3]) return false; flocks.push(makeFlock()); return true;
     case "yeti":   if (yeti || r > SW[3]) return false; return !!(yeti = makeYeti());
     case "hog":    if (hog || r > SW[0]) return false; hog = makeHog(); return true;
-    case "gopher": if (gophers.length > 1 || r > 1 - 0.5 * SW[3]) return false; gophers.push(makeGopher()); return true;
+    case "gopher": if (gophers.length || r > 1 - 0.5 * SW[3]) return false; gophers.push(makeGopher()); return true;
+    case "hawk":   if (hawk || dead || !fineWeather()) return false; hawk = makeHawk(); return true;
   }
   return false;
 }
@@ -2347,40 +2355,49 @@ function drawHog() {                                // in front, on the ground, 
   }
 }
 
-/* ---------- the woodpecker: hanging on the back of a lower pipe, hammering ---------- */
+/* ---------- the woodpecker: a desert one, hammering at a saguaro in summer ---------- */
 const PECKER = ["...RR...", "..RRRK..", "..KWWK..", "BBKWEK..", "...WWK..", "...KWKK.", "...KWKWK",
                 "...KWKKK", "...KKWKW", "...KWKKK", "...KKWK.", "....KK..", "....KK..", ".....K.."];
-const PECK_PAL = { R: "#d8282a", K: "#1c1c20", W: "#f2f2ea", E: "#141414", B: "#585858" };
-function peckFor() {                                // at spawn: does this pipe get one?
-  return FLAIR_MUL > 0 && Math.random() < FL.peck * SW[2] ? { f: Math.random(), ph: Math.random() * 3, hit: 0 } : null;
-}
-function drawPecker(p) {
-  const q = p.peck, room = SKY - (p.bot + CAP_H) - 44;
-  if (!q || room < 2) return;
-  const y = Math.round(p.bot + CAP_H + 6 + q.f * room), x = Math.round(p.x + PIPE_W);
-  if (y + 28 > SKY - groundCoverH(x + 8)) return;   // buried in the drift: it has gone
-  const c = (airClock + q.ph) % 1.4, n = c < 0.6 ? (c / 0.09) | 0 : -1, hit = n >= 0 && (c / 0.09) % 1 < 0.5;
-  const k = 0.7 * skyDk();
-  spr(PECKER.slice(5), PECK_PAL, x, y + 10, false, k, undefined, 2);
-  spr(PECKER.slice(0, 5), PECK_PAL, x - (hit ? 2 : 0), y, false, k, undefined, 2);
-  if (hit && n !== q.hit && !dead && chips.length < 60) {   // a chip of green paint flies off each blow
-    chips.push({ x: x, y: y + 7, vx: 25 + Math.random() * 45, vy: -40 - Math.random() * 50, age: 0, col: Math.random() < 0.5 ? C.pipeLt : C.pipeMid });
+const PECK_PAL = { R: "#d8282a", K: "#3a2e24", W: "#e8dcc0", E: "#141414", B: "#585858" };
+function peckFor(h, arms) {                         // when a cactus comes up: one on it? where?
+  if (FLAIR_MUL <= 0 || Math.random() >= FL.peck) return null;
+  const spots = [];
+  for (const sd of [-1, 1]) {                       // on the trunk, clear of the arm on that side...
+    const arm = arms.find(a => a.s === sd);
+    const lo = arm ? 3 : 4, hi = arm ? Math.floor(h * arm.y - arm.up - 16) : h - 22;
+    if (hi >= lo) spots.push({ s: sd, ox: sd > 0 ? 6 : -14, dy: lo + Math.round(Math.random() * (hi - lo)) });
+    if (arm) spots.push({ s: sd, ox: sd > 0 ? 15 : -22, dy: Math.max(0, Math.round(h * arm.y - arm.up)) });   // ...or out on the arm
   }
+  if (!spots.length) return null;
+  return Object.assign(spots[(Math.random() * spots.length) | 0], { ph: Math.random() * 3, hit: 0 });
+}
+function drawPecker(c) {
+  const q = c.peck;
+  if (!q) return;
+  const y = SKY - c.h + q.dy, x = Math.round(c.x), bx = x + q.ox;
+  const t = (airClock + q.ph) % 1.6, n = t < 0.7 ? (t / 0.09) | 0 : -1, hit = n >= 0 && (t / 0.09) % 1 < 0.5;
+  const k = 0.7 * skyDk(), flip = q.s < 0, d = hit ? -q.s : 0;
+  spr(PECKER.slice(5), PECK_PAL, bx, y + 5, flip, k);
+  spr(PECKER.slice(0, 5), PECK_PAL, bx + d, y, flip, k);
+  if (hit && n !== q.hit && !dead && chips.length < 60)   // a chip of cactus flies off each blow
+    chips.push({ x: q.s > 0 ? bx : bx + 7, y: y + 3, vx: q.s * (20 + Math.random() * 35), vy: -30 - Math.random() * 40, age: 0, col: Math.random() < 0.5 ? C.cactusLt : C.cactus });
   q.hit = n;
 }
 function stepChips(dt) {
   for (const c of chips) { c.age += dt; c.vy += 300 * dt; c.x += (c.vx - gspd) * dt; c.y += c.vy * dt; }
   chips = chips.filter(c => c.age < 0.6);
 }
-function drawChips() { for (const c of chips) px(c.x, c.y, 2, 2, c.col); }
+function drawChips() { for (const c of chips) px(c.x, c.y, 1, 1, c.col); }
 
 /* ---------- gophers: a cutaway of the ground, a tunnel dug as you watch, and up for a look ---------- */
 const GOPHER = ["..BBBBB..", ".BBBBBBEB", "BBBBBBBBN", "BLLLLBBTB", ".BBBBBBB.", ".C.C.C.C."];
 const GOPHER_HEAD = [".BBB.", "BEBEB", "BBNBB", ".BTB."];
 const GOPHER_PAL = { B: "#8a5a32", L: "#c09060", E: "#141414", N: "#ff9aa8", T: "#ffffff", C: "#3a2a1a" };
-function makeGopher() {
-  const y = SKY + 70 + Math.random() * 26;
-  return { gx: W + 12 + dist, y, ty: y, v: 26 + Math.random() * 10, t: 0, up: 0.5 + Math.random() * 0.5, mode: "dig", tun: [], peek: 0 };
+function makeGopher() {                            // each its own way: depth, pace, wiggle, and what it does at the end
+  const y = SKY + 66 + Math.random() * 32, r = Math.random();
+  return { gx: W + 12 + dist, y, ty: y, v: 16 + Math.random() * 26, wig: 4 + Math.random() * 18, t: 0,
+           up: 0.25 + Math.random() * 1.1, slant: Math.random() * 40, end: r < 0.55 ? "peek" : r < 0.8 ? "turn" : "deep",
+           mode: "dig", tun: [], peek: 0 };
 }
 function stepGophers(dt) {
   for (const g of gophers) {
@@ -2388,18 +2405,22 @@ function stepGophers(dt) {
     if (g.mode === "dig") {
       g.gx += g.v * dt;
       if (Math.abs(g.y - g.ty) < 1) g.ty = SKY + 66 + Math.random() * 32;
-      g.y += Math.sign(g.ty - g.y) * 8 * dt;
-      if (g.t > g.up) g.mode = "rise";
+      g.y += Math.sign(g.ty - g.y) * g.wig * dt;
+      if (g.t > g.up) {
+        if (g.end === "deep") { g.ty = SKY + 100; g.wig = 14; g.up = 1e9; }      // down and on, out of sight
+        else { g.mode = "rise"; g.turnY = g.end === "turn" ? SKY + 22 + Math.random() * 24 : 0; }
+      }
     } else if (g.mode === "rise") {
-      g.gx += 6 * dt; g.y -= 95 * dt;
-      if (g.y <= SKY + 10) { g.y = SKY + 10; g.mode = "peek"; g.peek = 0; g.mound = g.gx; }
+      g.gx += g.slant * dt; g.y -= 90 * dt;
+      if (g.turnY && g.y <= g.turnY) { g.mode = "dig"; g.ty = SKY + 90 + Math.random() * 8; g.wig = 30; g.up = 1e9; }   // thinks better of it
+      else if (g.y <= SKY + 10) { g.y = SKY + 10; g.mode = "peek"; g.peek = 0; g.mound = g.gx; }
     } else if (g.mode === "peek") {
       if ((g.peek += dt) > 1.2) g.mode = "gone";
     }
     const last = g.tun[g.tun.length - 1];
     if (g.mode !== "gone" && (!last || Math.hypot(g.gx - last[0], g.y - last[1]) >= 2)) g.tun.push([g.gx, g.y]);
   }
-  gophers = gophers.filter(g => (g.tun.length ? Math.max(g.gx, g.mound || 0) : g.gx) - dist > -20);
+  gophers = gophers.filter(g => (g.tun.length ? Math.max(g.gx, g.mound || 0) : g.gx) - dist > -20 && g.t < 30);
 }
 function drawGophers() {                            // after the ground, before the storm dims it
   if (!gophers.length) return;
@@ -2425,6 +2446,95 @@ function drawGophers() {                            // after the ground, before 
   }
 }
 
+/* ---------- the hawk: in fine weather it circles high, and now and then stoops.
+   Mostly it pulls out of the dive short of the bird; once in a while it does not. ---------- */
+const HAWK = { grabP: 0.03, speed: 250, passes: [1, 3] };
+let hawk = null, grabbed = false;
+const HAWK_UP = ["....DD........", "....DDD.......", ".....DDD......", ".....DDDD.....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "....LLLLL.BB..", "..............", ".............."];
+const HAWK_DN = ["..............", "..............", "..............", "..............", "TTBBBBBBBBBBB.", ".TTBBDDDDLBEBY", ".....DDDD.BB..", "....DDD.......", "...DD........."];
+const HAWK_STOOP = ["..............", "..............", "..............", "....DDDDDD....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "......LLLL.B..", "..............", ".............."];
+const HAWK_GRAB = ["..............", "..............", "..DD..........", "...DDDDDD.....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "......LLLL.B..", ".......F.F....", ".......F.F...."];
+const HAWK_PAL = { D: "#4a3020", B: "#7a5030", T: "#c0562c", L: "#ead9b6", E: "#141414", Y: "#f0c020", F: "#f0c020" };
+function fineWeather() { return ts.I < 0.02 && rainK < 0.15 && cloudCover() < 0.4 && SW[3] < 0.5; }
+function makeHawk() {
+  const side = sgn(), cx = 140 + Math.random() * 80, cy = 50 + Math.random() * 40;
+  return { st: "in", x: side > 0 ? W + 30 : -30, y: cy - 30, cx, cy, a: side > 0 ? 0 : Math.PI, R: 40 + Math.random() * 25,
+           t: 0, next: 3 + Math.random() * 3, passes: Math.round(randIn(HAWK.passes)), vx: 0, vy: 0, u: 0 };
+}
+function hawkRing(h) { return [h.cx + h.R * Math.cos(h.a), h.cy + 0.35 * h.R * Math.sin(h.a)]; }
+function hawkToward(h, x, y, v, dt) {               // fly straight at a point; true once there
+  const dx = x - h.x, dy = y - h.y, d = Math.hypot(dx, dy);
+  if (d < v * dt + 1) { h.x = x; h.y = y; return true; }
+  h.x += dx / d * v * dt; h.y += dy / d * v * dt; return false;
+}
+function startStoop(h) {
+  h.st = "stoop"; h.u = 0; h.P0 = [h.x, h.y];
+  h.grab = Math.random() < HAWK.grabP;
+  if (h.grab) { h.P1 = [birdX, bird.y - 10]; h.P2 = [birdX - 170, 30]; }
+  else {                                          // a feint: down at the bird, then it breaks off up and away
+    h.P1 = [birdX + 50 + Math.random() * 35, Math.max(24, bird.y - 12 - Math.random() * 40)];
+    h.P2 = [h.P1[0] + 50 + Math.random() * 40, Math.max(10, h.P1[1] - 110)];
+  }
+  const L = Math.hypot(h.P1[0] - h.P0[0], h.P1[1] - h.P0[1]) + Math.hypot(h.P2[0] - h.P1[0], h.P2[1] - h.P1[1]);
+  h.T = Math.max(1.1, L / HAWK.speed);
+}
+function stepHawk(dt) {
+  const h = hawk;
+  if (!h) return;
+  const x0 = h.x, y0 = h.y;
+  h.t += dt;
+  if (h.st === "in" || h.st === "back") {
+    const [rx, ry] = hawkRing(h);
+    if (hawkToward(h, rx, ry, 120, dt)) { h.st = "circle"; h.next = 4 + Math.random() * 4; }
+  } else if (h.st === "circle") {
+    h.cx = Math.max(120, Math.min(230, h.cx + (airU * 0.05 - gspd * 0.02) * dt));
+    h.a += 0.9 * dt;
+    [h.x, h.y] = hawkRing(h);
+    if (!fineWeather()) h.passes = 0;            // the weather turns: it goes
+    if ((h.next -= dt) <= 0) {
+      if (h.passes <= 0) h.st = "out";
+      else if (!dead) { h.passes--; startStoop(h); }
+      else h.next = 2;
+    }
+  } else if (h.st === "stoop") {
+    if (h.grab && h.u < 0.5 && !dead) h.P1 = [birdX, bird.y - 10];   // it follows the bird down
+    h.u = Math.min(1, h.u + dt / h.T);
+    const u = h.u, P0 = h.P0, P1 = h.P1, P2 = h.P2;
+    const Cx = 2 * P1[0] - (P0[0] + P2[0]) / 2, Cy = 2 * P1[1] - (P0[1] + P2[1]) / 2;
+    h.x = (1 - u) * (1 - u) * P0[0] + 2 * u * (1 - u) * Cx + u * u * P2[0];
+    h.y = (1 - u) * (1 - u) * P0[1] + 2 * u * (1 - u) * Cy + u * u * P2[1];
+    if (h.grab && !dead && u > 0.4 && Math.hypot(h.x - birdX, h.y + 10 - bird.y) < 16) {   // talons out: got it
+      h.st = "carry"; grabbed = true; die(); flash = 0.35;
+    } else if (u >= 1) h.st = "back";
+  } else if (h.st === "carry") {
+    h.x += (h.P2[0] < h.P0[0] ? -70 : 70) * dt; h.y -= 85 * dt;            // heavy now: a slow climb away
+    if (h.y < -40 || h.x < -40 || h.x > W + 40) hawk = null;
+  } else if (h.st === "out") {
+    h.x += (h.cx > W / 2 ? 90 : -90) * dt; h.y -= 25 * dt;
+    if (h.x < -40 || h.x > W + 40) hawk = null;
+  }
+  if (dt > 0) { h.vx = (h.x - x0) / dt; h.vy = (h.y - y0) / dt; }
+}
+function drawHawk() {                               // in front of everything but the HUD: it is close
+  const h = hawk;
+  if (!h) return;
+  const left = h.vx < -1, ang = Math.max(-1.1, Math.min(1.1, Math.atan2(h.vy, Math.abs(h.vx) + 1e-3)));
+  const strike = h.st === "stoop" && h.grab && h.u > 0.3 && h.u < 0.6;
+  const rows = h.st === "carry" ? ((h.t * 12) | 0) % 2 ? HAWK_UP : HAWK_DN
+             : h.st === "stoop" ? (strike ? HAWK_GRAB : h.u < 0.5 ? HAWK_STOOP : ((h.t * 10) | 0) % 2 ? HAWK_UP : HAWK_DN)
+             : (h.t % 5) < 0.8 ? (((h.t * 8) | 0) % 2 ? HAWK_UP : HAWK_DN) : HAWK_UP;   // soaring, a few flaps now and then
+  const k = 0.7 * skyDk();
+  ctx.save();
+  ctx.translate(Math.round(h.x), Math.round(h.y));
+  if (left) ctx.scale(-1, 1);
+  ctx.rotate(ang);
+  for (let r = 0; r < rows.length; r++) for (let c = 0; c < 14; c++) {
+    const ch = rows[r][c]; if (ch === ".") continue;
+    ctx.fillStyle = tint(HAWK_PAL[ch], k); ctx.fillRect(c * 2 - 14, r * 2 - 9, 2, 2);
+  }
+  ctx.restore();
+}
+
 function draw() {
   blendPalette();
   sky();
@@ -2441,6 +2551,8 @@ function draw() {
   skyLight();
   drawStrikes(1);                                // nearer: in front of the hills, behind the pipes
   drawCacti();
+  for (const c of cacti) drawPecker(c);
+  drawChips();
   drawFlowers();
   groundSand();                                  // over the foot of the cacti and flowers, under the shade
   drawShadows();
@@ -2449,9 +2561,7 @@ function draw() {
     pipePart(p.x, 0, p.top, true);
     pipePart(p.x, p.bot, SKY, false);
     pipeSand(p);
-    drawPecker(p);
   }
-  drawChips();
   drawWater();
   ground();
   drawGophers();
@@ -2468,6 +2578,7 @@ function draw() {
   drawBirdAura();
   drawSweat();
   drawBird();
+  drawHawk();
   drawDustLeaves(true);                          // the near leaves pass in front of the bird
   drawBolts();
   drawFeathers();
@@ -2503,7 +2614,7 @@ function draw() {
     ctx.fillStyle = "rgba(20,32,15,.92)";
     ctx.fillRect(W / 2 - 76, H / 2 - 40, 152, 80);
     txt("CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
-    txt(struck ? "struck by lightning" : "score " + score, W / 2, H / 2 + 8, struck ? "#cfd8ff" : "#9fb0bd", F.hud, "center");
+    txt(struck ? "struck by lightning" : grabbed ? "taken by a hawk" : "score " + score, W / 2, H / 2 + 8, struck ? "#cfd8ff" : grabbed ? "#ffd27a" : "#9fb0bd", F.hud, "center");
     txt("restarting...", W / 2, H / 2 + 26, "#9fb0bd", F.hud, "center");
   }
 

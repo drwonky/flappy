@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r15</div>
+<div id="hud">seasons r16</div>
 
 <script>
 "use strict";
@@ -2162,7 +2162,7 @@ function trySpawn(k) {
     case "geese":  if (has("geese") || r > 0.9 * (SW[0] + SW[2])) return false; flocks.push(makeGeese()); return true;
     case "flock":  if (has("flock") || r > 1 - 0.7 * SW[3]) return false; flocks.push(makeFlock()); return true;
     case "yeti":   if (yeti || r > SW[3]) return false; return !!(yeti = makeYeti());
-    case "hog":    if (hog || r > Math.max(SW[0], 0.8 * ts.I)) return false;   // spring, or up to see the storm hog = makeHog(); return true;
+    case "hog":    if (hog || r > Math.max(SW[0], 0.8 * ts.I)) return false; hog = makeHog(); return true;   // spring, or up to see the storm
     case "gopher": if (gophers.length || r > 1 - 0.5 * SW[3]) return false; gophers.push(makeGopher()); return true;
     case "hawk":   if (hawk || dead || !fineWeather()) return false; hawk = makeHawk(); return true;
   }

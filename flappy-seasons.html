@@ -65,7 +65,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r16</div>
+<div id="hud">seasons r17</div>
 
 <script>
 "use strict";
@@ -2164,7 +2164,7 @@ function trySpawn(k) {
     case "yeti":   if (yeti || r > SW[3]) return false; return !!(yeti = makeYeti());
     case "hog":    if (hog || r > Math.max(SW[0], 0.8 * ts.I)) return false; hog = makeHog(); return true;   // spring, or up to see the storm
     case "gopher": if (gophers.length || r > 1 - 0.5 * SW[3]) return false; gophers.push(makeGopher()); return true;
-    case "hawk":   if (hawk || dead || !fineWeather()) return false; hawk = makeHawk(); return true;
+    case "hawk":   if (hawk || dead || !fineWeather() || hawkRoom() < 16) return false; hawk = makeHawk(); return true;
   }
   return false;
 }
@@ -2535,7 +2535,7 @@ function drawGophers() {                            // after the ground, before 
 
 /* ---------- the hawk: in fine weather it circles high, and now and then stoops.
    Mostly it pulls out of the dive short of the bird; once in a while it does not. ---------- */
-const HAWK = { grabP: 0.03, speed: 250, passes: [1, 3],
+const HAWK = { grabP: 0.015, speed: 250, passes: [1, 3],
                far: 2, feint: 4, prey: 4, near: 5 };   // its pixel size: circling high, at a near miss, at the ground, on the bird
 function hawkQ(h) { return Math.max(1, Math.round(h.s * 2) / 2); }   // drawn in half-pixel steps
 const hawkHold = s => 4 * s + 6;                    // talons to the middle of the bird it holds
@@ -2546,11 +2546,19 @@ const HAWK_DN = ["..............", "..............", "..............", "........
 const HAWK_STOOP = ["..............", "..............", "..............", "....DDDDDD....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "......LLLL.B..", "..............", ".............."];
 const HAWK_GRAB = ["..............", "..............", "..DD..........", "...DDDDDD.....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "......LLLL.B..", ".......F.F....", ".......F.F...."];
 const HAWK_PAL = { D: "#4a3020", B: "#7a5030", T: "#c0562c", L: "#ead9b6", E: "#141414", Y: "#f0c020", F: "#f0c020" };
-function fineWeather() { return ts.I < 0.02 && rainK < 0.15 && cloudCover() < 0.4 && SW[3] < 0.5; }
+function fineWeather() { return ts.I < 0.02 && rainK < 0.15 && cloudCover() < 0.4 && SW[3] < 0.5; }   // to come out at all
+function hawkStays() { return ts.I < 0.02; }      // once out, only the storm drives it off: it sees out a shower, a cloud, the first snow
+const HAWK_LULL = 15;
+function hawkRoom() {                               // s of season clock before the storm comes
+  const L = 4 * SEASON.len, [s0, d] = stormWindow(), f = s0 - 2;
+  if (((seasonT - f) % L + L) % L < d + 4) return 0;   // in it now
+  return ((f - seasonT) % L + L) % L;
+}
+function hawkPasses() { return Math.min(Math.round(randIn(HAWK.passes)), Math.floor((hawkRoom() - 6) / 10)); }   // as many as the weather has room for                               // s it will ride out a shower or a cloud up high, holding its stoops
 function makeHawk() {
   const side = sgn(), cx = 140 + Math.random() * 80, cy = 50 + Math.random() * 40;
   return { st: "in", x: side > 0 ? W + 30 : -30, y: cy - 30, cx, cy, a: side > 0 ? 0 : Math.PI, R: 40 + Math.random() * 25,
-           t: 0, next: 3 + Math.random() * 3, passes: Math.round(randIn(HAWK.passes)), vx: 0, vy: 0, u: 0, s: HAWK.far };
+           t: 0, next: 0, passes: hawkPasses(), flown: 0, vx: 0, vy: 0, u: 0, s: HAWK.far };
 }
 function hawkRing(h) { return [h.cx + h.R * Math.cos(h.a), h.cy + 0.35 * h.R * Math.sin(h.a)]; }
 function hawkToward(h, x, y, v, dt) {               // fly straight at a point; true once there
@@ -2602,17 +2610,23 @@ function stepHawk(dt) {
   h.t += dt;
   if (h.st === "in" || h.st === "back") {
     const [rx, ry] = hawkRing(h);
-    if (hawkToward(h, rx, ry, 120, dt)) { h.st = "circle"; h.next = 4 + Math.random() * 4; }
+    if (hawkToward(h, rx, ry, 120, dt)) {
+      h.next = h.st === "in" ? 2 + 2 * Math.random() : h.passes > 0 ? 4 + 3 * Math.random() : 1.5 + 1.5 * Math.random();   // in to it soon; off soon after the last
+      h.st = "circle";
+    }
   } else if (h.st === "circle") {
     h.cx = Math.max(120, Math.min(230, h.cx + (airU * 0.05 - gspd * 0.02) * dt));
     h.a += 0.9 * dt;
     [h.x, h.y] = hawkRing(h);
-    if (!fineWeather()) h.passes = 0;            // the weather turns: it goes
-    const prey = findPrey();
+    const lull = !fineWeather();                  // a shower or a cloud over: it circles on and waits
+    h.lull = lull ? (h.lull || 0) + dt : 0;
+    if (!hawkStays() || h.lull > HAWK_LULL) h.passes = 0;   // the weather turns for good: it goes
+    const prey = !lull && h.flown > 0 && findPrey();   // a pass at the bird first
     if (prey) stoopAt(h, prey);                   // something out on the ground: straight down at it
+    else if (lull && h.passes > 0) { /* holding */ }
     else if ((h.next -= dt) <= 0) {
       if (h.passes <= 0) h.st = "out";
-      else if (!dead) { h.passes--; startStoop(h); }
+      else if (!dead) { h.passes--; h.flown++; startStoop(h); }
       else h.next = 2;
     }
   } else if (h.st === "stoop") {

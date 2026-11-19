@@ -69,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r22</div>
+<div id="hud">seasons r23</div>
 
 <script>
 "use strict";
@@ -942,31 +942,31 @@ const SMOKE = { scorch: 0.72 };                     // heat at which it is lit f
 let sparks = [];
 function stepTrail(dt) {
   const e = dead ? 0 : heatE();
-  for (let n = (20 + 90 * e) * dt; e > HEAT.smokeAt && n > 0; n--) if (Math.random() < n) {
+  for (let n = (50 + 100 * e) * dt; e > HEAT.smokeAt && n > 0; n--) if (Math.random() < n) {
     const c = e < 0.55 ? TRAIL_COLS[0].map((v, i) => v + (TRAIL_COLS[1][i] - v) * (e - 0.25) / 0.3)
                        : TRAIL_COLS[1].map((v, i) => v + (TRAIL_COLS[2][i] - v) * Math.min(1, (e - 0.55) / 0.4));
-    trail.push({ x: birdX - 13 + Math.random() * 20, y: bird.y - 11 + Math.random() * 4,   // off the back and the head
-                 vx: -gspd, vy: -20, r: 1.5, g: 5 + 9 * e, age: 0, life: 0.9 + 1.3 * e,
-                 a: 0.2 + 0.3 * (e - 0.25), col: "rgb(" + c.map(Math.round).join(",") + ")",
-                 hi: "rgb(" + c.map(v => Math.round(v + (255 - v) * 0.3)).join(",") + ")",
-                 ph: Math.random() * 6.28, cw: 6 + 8 * Math.random(), hot: e > SMOKE.scorch });
+    trail.push({ x: birdX - 7 + Math.random() * 12, y: bird.y - 9 + Math.random() * 3,   // up off its back, not out behind it
+                 vx: -0.15 * gspd, vy: -60 - 25 * Math.random() + 0.3 * Math.min(0, bird.vy),   // dragged along in its wake, rising hot
+                 r: 2 + Math.random(), g: 6 + 10 * e, age: 0, life: 1.1 + 1.5 * e,
+                 a: 0.2 + 0.12 * (e - 0.25), col: "rgb(" + c.map(Math.round).join(",") + ")",
+                 ph: Math.random() * 6.28, cw: 4 + 6 * Math.random(), hot: e > SMOKE.scorch });
   }
   if (e > SMOKE.scorch && Math.random() < 30 * (e - SMOKE.scorch) * dt / (1 - SMOKE.scorch))   // sparks flying up
-    sparks.push({ x: birdX - 12 + Math.random() * 18, y: bird.y - 11, vx: -gspd - 20 + 40 * Math.random(), vy: -50 - 50 * Math.random(), age: 0, life: 0.4 + 0.5 * Math.random() });
+    sparks.push({ x: birdX - 8 + Math.random() * 14, y: bird.y - 10, vx: -0.3 * gspd - 15 + 30 * Math.random(), vy: -60 - 50 * Math.random(), age: 0, life: 0.4 + 0.5 * Math.random() });
   for (const p of trail) {                           // the same air as the dust: around the pipes, never through
-    p.age += dt; p.r += p.g * dt * (1 - 0.5 * p.age / p.life);
+    p.age += dt; p.r += p.g * dt * (1 - 0.6 * p.age / p.life);
     windAt(p.x, p.y); pipeFlow(p.x, p.y);
     const vAir = Math.max(-STORM.vAirMax, Math.min(STORM.vAirMax, WA.a)) + PF.v;
-    const curl = p.cw * Math.sin(p.ph + p.age * 7);  // it curls as it climbs
-    p.vx += (visU(WA.u) * PF.u - gspd + curl - p.vx) * (1 - Math.exp(-5 * dt));
-    p.vy += (-(22 + 16 * p.age) + vAir - p.vy) * (1 - Math.exp(-4 * dt));     // hot: it climbs
+    const curl = p.cw * Math.sin(p.ph + p.age * 5);  // it wavers as it climbs
+    p.vx += (visU(WA.u) * PF.u - gspd + curl - p.vx) * (1 - Math.exp(-1.6 * dt));   // left behind only bit by bit
+    p.vy += (-(16 + 30 * (1 - p.age / p.life)) + vAir - p.vy) * (1 - Math.exp(-2.5 * dt));   // buoyant, slowing as it cools
     p.x += p.vx * dt; p.y += p.vy * dt;
     keepOut(p, 1, 1, 1, 1);
   }
   for (const q of sparks) { q.age += dt; q.vx += (-gspd - q.vx) * (1 - Math.exp(-2 * dt)); q.vy += 60 * dt; q.x += q.vx * dt; q.y += q.vy * dt; }
   sparks = sparks.filter(q => q.age < q.life);
   trail = trail.filter(p => p.age < p.life && p.x > -p.r - 4 && p.y > -p.r - 4);
-  if (trail.length > 160) trail.splice(0, trail.length - 160);
+  if (trail.length > 240) trail.splice(0, trail.length - 240);
 }
 function drawTrail() {
   if (!trail.length && !sparks.length) return;
@@ -976,16 +976,19 @@ function drawTrail() {
   for (const p of pipes) for (const q of pipeRects(p))
     ctx.rect(q[0], Math.max(-1, q[1]), q[2] - q[0], Math.min(H + 1, q[3]) - Math.max(-1, q[1]));
   ctx.clip("evenodd");
+  // many faint, overlapping, swelling puffs: alone each is barely there, together they are
+  // one soft plume, thick by the bird and thinning to nothing as it spreads
   for (const p of trail) {
-    const u = p.age / p.life, f = Math.min(1, u * 5) * (1 - u);   // in quick, thinning out as it spreads
-    const r = Math.max(1, Math.round(p.r));
+    const u = p.age / p.life, f = Math.min(1, u * 6) * (1 - u) * (1 - u);
+    const r = Math.max(2, Math.round(p.r));
     ctx.globalAlpha = p.a * f;
     disc(p.x, p.y, r, p.col);
-    if (r >= 2) { ctx.globalAlpha = p.a * f * 0.6; disc(p.x - r * 0.3, p.y - r * 0.35, Math.max(1, Math.round(r * 0.55)), p.hi); }   // lit on top: a billow
-    if (p.hot && u < 0.3) {                          // fire under it: lit orange from below
-      ctx.globalAlpha = 0.55 * (1 - u / 0.3);
-      disc(p.x, p.y + r * 0.4, Math.max(1, Math.round(r * 0.6)), u < 0.12 ? "#ffb040" : "#e0582a");
-    }
+    ctx.globalAlpha = p.a * f * 0.8;
+    disc(p.x, p.y, Math.max(1, Math.round(r * 0.55)), p.col);   // denser in the middle
+  }
+  for (const p of trail) if (p.hot && p.age < 0.25) {   // fire under it: the first of each puff glows
+    ctx.globalAlpha = 0.22 * (1 - p.age / 0.25);
+    disc(p.x, p.y + 1, Math.max(2, Math.round(p.r * 0.7)), p.age < 0.1 ? "#ffb040" : "#e0582a");
   }
   for (const q of sparks) {
     ctx.globalAlpha = 1 - q.age / q.life;
@@ -2773,13 +2776,15 @@ function drawHawk() {                               // in front of everything bu
 /* ---------- an earthquake, once in a long while. A rumble, then the big one: the pipes topple flat,
    the poles splay, the wires sag and snap, the ground cracks open and rocks tumble off the hills.
    For 30 s the bird has a free pass (every fallen pipe still scores); then it all stands back up. ---------- */
-const QUAKE = { rate: 1 / 300, rumble: 1.3, down: 30, rise: 4, riseDur: 1.8, mid: 170, shock: 6 };   // per s; phases, s; the free-pass line, px; shake, px
+const QUAKE = { rate: 1 / 300, calm: 240, rumble: 1.3, down: 30, rise: 4, riseDur: 1.8, mid: 170, spread: 55, shock: 6 };   // per s; never closer than, s; phases, s; the free-pass line and how far its gaps wander, px; shake, px
 const QUAKE_MUL = qnum("quake") !== null ? Math.max(0, qnum("quake")) : 1;
 let quake = null, quakeK = 0, fallen = [], cracks = [], rocks = [];
+let quakeCalm = 0;                                  // s of flying before the ground may shake again (kept across games)
 const quakeT1 = () => QUAKE.rumble + QUAKE.down;
 function startQuake() {
   if (quake || dead) return;
   quake = { t: 0, fell: false, rose: false, after: 0, nextAfter: 6 + Math.random() * 6, crackAt: dist };
+  quakeCalm = QUAKE.calm / Math.max(1, QUAKE_MUL);  // never two close together
 }
 function fallOf(p, d0) { return { p, d0, age: 0, dirB: sgn(), dirT: sgn(), landed: false }; }
 function topple() {                                 // the big one
@@ -2802,14 +2807,14 @@ function standUp() {                                // the ones clear of the bir
   for (const f of fallen) {
     f.rd = Math.random() * 0.8;
     const behind = f.p.x + PIPE_W + CAP_X < birdX - HW - 12;
-    const ahead = f.p.x - CAP_X - (birdX + HW) > vrun * (f.rd + QUAKE.riseDur) + 40;
+    const ahead = f.p.x - CAP_X - (birdX + HW) > vrun * (f.rd + QUAKE.riseDur) + 90;
     if (behind || ahead) f.r = 0;
   }
 }
 function quakeSpawn() {                             // a pipe coming in while the ground is shaken flat: it is down already
   if (!quake || !quake.fell) return;
   const p = pipes.pop();
-  p.top = QUAKE.mid - GAP0 / 2; p.bot = p.top + GAP0;  // a wide gap on the bird's line, for when it stands back up
+  p.top = QUAKE.mid - GAP0 / 2 + (Math.random() * 2 - 1) * QUAKE.spread; p.bot = p.top + GAP0;  // a wide gap near the bird's line (but not all in a row), for when it stands back up
   aimOff = 0;
   const f = fallOf(p, -9); f.landed = true;
   if (quake.rose) { f.r = 0; f.rd = 0; }
@@ -2819,7 +2824,10 @@ function quakeLabel() {                            // the HUD's weather line whi
   const t = quake.t, T1 = quakeT1();
   return t < QUAKE.rumble + 3 ? ["EARTHQUAKE", "#ffb070"] : t < T1 ? ["FREE PASS " + Math.ceil(T1 - t), "#ffe08a"] : ["PIPES RISING", "#ffb070"];
 }
-function quakeAim() {                               // nothing standing to steer by: hold the free-pass line
+function quakeAim() {                               // nothing standing: steer by the gap of the next fallen pipe that will get up
+  let n = null;
+  for (const f of fallen) if (f.p.x + PIPE_W > birdX - HW && (!quake.rose || f.r !== undefined) && (!n || f.p.x < n.x)) n = f.p;
+  if (n) return n;
   return { x: birdX + 1, top: QUAKE.mid - GAP0 / 2, bot: QUAKE.mid + GAP0 / 2 };
 }
 function makeCrack(gx) {
@@ -2836,7 +2844,8 @@ function quakeShake() {                             // px of screen shake
   return 1.2 * Math.max(0, 1 - (t - T1) / QUAKE.rise);   // rumbling back up
 }
 function stepQuake(dt) {
-  if (!quake && QUAKE_MUL > 0 && clock > 15 && Math.random() < dt * QUAKE.rate * QUAKE_MUL) startQuake();
+  quakeCalm -= dt;
+  if (!quake && QUAKE_MUL > 0 && clock > 15 && quakeCalm <= 0 && Math.random() < dt * QUAKE.rate * QUAKE_MUL) startQuake();
   const R = QUAKE.riseDur;
   for (const f of fallen) {
     f.p.x -= gspd * dt; f.age += dt;

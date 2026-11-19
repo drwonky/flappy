@@ -41,6 +41,10 @@
   #disco{flex:none;font:inherit;text-transform:uppercase;letter-spacing:0;cursor:pointer;
     padding:6px 8px;min-width:7ch;color:#ffe9ff;background:#3a1f4a;border:0;border-radius:0;
     box-shadow:inset 0 0 0 2px #000,inset -3px -3px 0 #24102e;-webkit-tap-highlight-color:transparent}
+  /* TV (?tv): the world is as wide as the screen, nothing but the game, no pointer */
+  body.tv{padding:0;gap:0;cursor:none}
+  body.tv #windctl, body.tv #hud{display:none}
+  body.tv canvas{box-shadow:none;border-radius:0}
   #disco:focus{outline:none}
   #disco:focus-visible{outline:2px solid #7fe8ff;outline-offset:2px}
   #disco.on{color:#000;animation:disco 0.8s steps(4) infinite}
@@ -65,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r18</div>
+<div id="hud">seasons r19</div>
 
 <script>
 "use strict";
@@ -74,7 +78,18 @@
    GEOMETRY - 288x512 logical, base 288x112 -> sky 400. SKY is
    nudged to 399 so the horizon lands on a scan row.
    ============================================================ */
-const W = 288, H = 512, GROUND = 113;
+/* TV mode (?tv): the logical world is widened to the SCREEN's shape (not the window's,
+   so going fullscreen changes nothing), 512 tall as always: on a 16:9 set that is 910
+   wide and the picture fills it edge to edge. The controls and the caption go away. */
+const TV = /[?&]tv(=|&|$)/.test(location.search);
+function tvWidth() {
+  let a = 0;
+  try { a = Math.max(screen.width / screen.height, innerWidth / innerHeight); } catch (e) {}
+  return isFinite(a) && a > 0 ? Math.max(288, Math.min(1400, 2 * Math.round(256 * a))) : 288;
+}
+const W = TV ? tvWidth() : 288, H = 512, GROUND = 113;
+const WK = W / 288;                                 // how much more world there is across than the usual
+const reps = (n, span, gap) => TV ? Math.max(n, Math.ceil(span / gap)) : n;   // enough of a repeating thing to span a TV
 const SKY = H - GROUND;
 
 /* PHYSICS - per-frame values widely quoted for the original (gravity
@@ -675,9 +690,9 @@ function stepRain(dt) {
   rainK += (rGoal - rainK) * (1 - Math.exp(-dt / 1.5));
   bow = Math.max(0, bow - dt);
   const flow = (visU(airU) - gspd) * 0.8;
-  let n = rainK * RAIN.rate * dt;                     // drops only come in from above the screen, upwind enough
+  let n = rainK * RAIN.rate * WK * dt;                     // drops only come in from above the screen, upwind enough
   const lead = Math.max(0, -flow) * SKY / RAIN.speed, trail = Math.max(0, flow) * SKY / RAIN.speed;
-  for (; n > 0; n--) if (Math.random() < n && rain.length < RAIN.max * (1 + ts.I))
+  for (; n > 0; n--) if (Math.random() < n && rain.length < RAIN.max * WK * (1 + ts.I))
     rain.push({ x: -trail - 4 + Math.random() * (W + lead + trail + 8), y: -6 - Math.random() * 20, vy: RAIN.speed + Math.random() * 60 });
   for (const d of rain) {
     d.x += flow * dt; d.y += d.vy * dt; d.sl = flow / d.vy;
@@ -1631,9 +1646,9 @@ function groundShadows() {                         // ...and where it falls acro
 function clouds() {                                // fair-weather clouds; smoke banks in summer
   ctx.fillStyle = C.cloud;
   ctx.globalAlpha = SFX.cloudA;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0, n = reps(3, W + 120, 118); i < n; i++) {
     const x = Math.round((((i * 118) - cloudX) % (W + 120) + W + 120) % (W + 120) - 60);
-    const y = 46 + i * 58;
+    const y = 46 + (i % 3) * 58;
     ctx.fillRect(x, y, 44, 10);
     ctx.fillRect(x + 8, y - 6, 28, 6);
     ctx.fillRect(x + 16, y - 11, 14, 5);
@@ -1738,7 +1753,7 @@ function skyline() {                              // green hills (snow-capped in
   const dk = TSTORM.dark * ts.I, hd = dk > 0.01 ? mixHex(C.hillDark, "#10142a", dk) : C.hillDark, hl = dk > 0.01 ? mixHex(C.hill, "#10142a", dk) : C.hill;
   if (m < 1) {                                    // far hills
     ctx.globalAlpha = 1 - m;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0, n = reps(8, W + 70, 46); i < n; i++) {
       const x = Math.round((((i * 46) - dist * 0.06) % (W + 70) + W + 70) % (W + 70) - 35);
       ctx.fillStyle = hd; ctx.fillRect(x, SKY - 26, 34, 26);
       if (cap > 0) { ctx.fillStyle = "#d3e0ec"; ctx.fillRect(x, SKY - 26, 34, cap); ctx.fillRect(x + 3, SKY - 26 + cap, 6, 2); }
@@ -1747,7 +1762,7 @@ function skyline() {                              // green hills (snow-capped in
   if (m > 0) {                                    // far mesas
     ctx.globalAlpha = m;
     ctx.fillStyle = hd;
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0, n = reps(5, W + 110, 74); i < n; i++) {
       const x = Math.round((((i * 74) - dist * 0.05) % (W + 110) + W + 110) % (W + 110) - 55);
       const h = 30 + (i * 13) % 22;
       ctx.fillRect(x, SKY - h, 52, h);
@@ -1760,7 +1775,7 @@ function skyline() {                              // green hills (snow-capped in
   drawYeti();
   if (m < 1) {                                    // near hills
     ctx.globalAlpha = 1 - m;
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0, n = reps(9, W + 60, 40); i < n; i++) {
       const x = nearHillX(i);
       ctx.fillStyle = hl; ctx.fillRect(x, SKY - 14, 30, 14); ctx.fillRect(x + 4, SKY - 18, 22, 4);
       if (cap > 0) { ctx.fillStyle = "#f4f8fc"; ctx.fillRect(x + 4, SKY - 18, 22, cap); ctx.fillRect(x, SKY - 14, 4, cap); ctx.fillRect(x + 26, SKY - 14, 4, cap); }
@@ -1769,7 +1784,7 @@ function skyline() {                              // green hills (snow-capped in
   if (m > 0) {                                    // near mesas
     ctx.globalAlpha = m;
     ctx.fillStyle = hl;
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0, n = reps(7, W + 60, 52); i < n; i++) {
       const x = Math.round((((i * 52) - dist * 0.14) % (W + 60) + W + 60) % (W + 60) - 30);
       ctx.fillRect(x, SKY - 10, 44, 10);
       ctx.fillRect(x + 8, SKY - 14, 26, 4);
@@ -2204,7 +2219,7 @@ function trySpawn(k) {
 }
 function hillSlot() {                               // a near hill well onto the screen, with time to spare
   const ok = [];
-  for (let i = 0; i < 9; i++) { const x = nearHillX(i); if (x > 130 && x < W - 40) ok.push(i); }
+  for (let i = 0, n = reps(9, W + 60, 40); i < n; i++) { const x = nearHillX(i); if (x > 130 && x < W - 40) ok.push(i); }
   return ok.length ? ok[(Math.random() * ok.length) | 0] : -1;
 }
 
@@ -3230,6 +3245,16 @@ function showWind() {
   windIn.setAttribute("aria-valuetext", s);
 }
 const discoBtn = document.getElementById("disco");
+if (TV) {
+  document.body.classList.add("tv");
+  const full = () => {
+    const d = document, el = d.documentElement;
+    if (d.fullscreenElement || d.webkitFullscreenElement) (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+    else { const rq = el.requestFullscreen || el.webkitRequestFullscreen; if (rq) try { const r = rq.call(el); if (r && r.catch) r.catch(() => {}); } catch (e) {} }
+  };
+  addEventListener("click", full);
+  addEventListener("keydown", e => { if (e.key === "Enter" || e.key === "f" || e.key === "F") { e.preventDefault(); full(); } });
+}
 function syncControls() {                          // after disco starts or ends
   windIn.value = String(windToSlider(sunMul));
   showWind();

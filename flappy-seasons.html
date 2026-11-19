@@ -69,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r25</div>
+<div id="hud">seasons r26</div>
 
 <script>
 "use strict";
@@ -535,23 +535,30 @@ function drawUfo() {                                // in front of everything bu
 }
 
 /* ---------- the round after an abduction: they have left something in the bird. A little dish
-   pops out of its tail, swings round to the sky and taps out HELLO WORLD in morse. ---------- */
-const MORSE = { H: "....", E: ".", L: ".-..", O: "---", W: ".--", R: ".-.", D: "-.." };
-const DISH = { msg: "HELLO WORLD", unit: 0.14, wait: 1.5, out: 0.45, aim: 0.8, hold: 1.6, back: 0.5, aimW: -2.25 };
-const MPLAN = (() => {                              // key-downs [from, to, letter, symbol] in units; when each letter is done
+   pops out of its tail, swings round to the sky and taps out a message home in morse. ---------- */
+const MORSE = { A: ".-", B: "-...", C: "-.-.", D: "-..", E: ".", F: "..-.", G: "--.", H: "....", I: "..", J: ".---", K: "-.-", L: ".-..", M: "--",
+  N: "-.", O: "---", P: ".--.", Q: "--.-", R: ".-.", S: "...", T: "-", U: "..-", V: "...-", W: ".--", X: "-..-", Y: "-.--", Z: "--..",
+  ",": "--..--", "'": ".----.", "!": "-.-.--" };
+const DISH_MSGS = ["HELLO WORLD", "ET PHONE HOME", "I LOVE TO SINGA", "SCREW YOU GUYS, I'M GOING HOME!"];
+const DISH = { unit: 0.14, maxTx: 24, wait: 1.5, out: 0.45, aim: 0.8, hold: 1.6, back: 0.5, aimW: -2.25 };   // s per morse unit, at most this long sending
+function morsePlan(msg) {                           // key-downs [from, to, letter, symbol] in units; when each letter is done
   const on = [], done = []; let t = 0;
-  for (let i = 0; i < DISH.msg.length; i++) {
-    const ch = DISH.msg[i];
+  for (let i = 0; i < msg.length; i++) {
+    const ch = msg[i];
     if (ch === " ") { t += 4; done.push(t); continue; }   // 3 after the letter + 4 = the 7 between words
     const code = MORSE[ch];
     for (let j = 0; j < code.length; j++) { const d = code[j] === "." ? 1 : 3; on.push([t, t + d, i, j]); t += d + 1; }
     t += 2; done.push(t);                           // 1 + 2 = the 3 between letters
   }
   return { on, done, len: t };
-})();
+}
+function makeDish() {                               // one of the messages; a long one is keyed faster
+  const msg = DISH_MSGS[(Math.random() * DISH_MSGS.length) | 0], plan = morsePlan(msg);
+  return { t: 0, msg, plan, unit: Math.min(DISH.unit, DISH.maxTx / plan.len) };
+}
 let dish = null, waves = [];
-function dishTimes() { const a = DISH.wait, b = a + DISH.out, c = b + DISH.aim, d = c + MPLAN.len * DISH.unit, e = d + DISH.hold; return [a, b, c, d, e, e + DISH.back]; }
-function dishU() { return dish ? (dish.t - dishTimes()[2]) / DISH.unit : -1; }   // morse units into the message
+function dishTimes() { const a = DISH.wait, b = a + DISH.out, c = b + DISH.aim, d = c + dish.plan.len * dish.unit, e = d + DISH.hold; return [a, b, c, d, e, e + DISH.back]; }
+function dishU() { return dish ? (dish.t - dishTimes()[2]) / dish.unit : -1; }   // morse units into the message
 function dishGeo() {                                // how far out (0..1), its angle in the bird's frame, keyed?
   if (!dish) return null;
   const [a, b, c, d, e, f] = dishTimes(), t = dish.t;
@@ -560,8 +567,8 @@ function dishGeo() {                                // how far out (0..1), its a
   const ext = t < b ? smooth(pop) * (1 + 0.35 * Math.sin(Math.PI * pop)) : t < e ? 1 : 1 - smooth((t - e) / DISH.back);
   const back = -Math.PI, sky = DISH.aimW - birdRot();       // straight out behind, then up at the sky whatever the bird does
   const w = t < b ? 0 : t < e ? smooth((t - b) / DISH.aim) : 1 - smooth((t - e) / DISH.back);
-  const u = (t - c) / DISH.unit;
-  return { ext, ang: back + (sky - back) * w, key: t >= c && t < d && MPLAN.on.some(o => u >= o[0] && u < o[1]) };
+  const u = (t - c) / dish.unit;
+  return { ext, ang: back + (sky - back) * w, key: t >= c && t < d && dish.plan.on.some(o => u >= o[0] && u < o[1]) };
 }
 const DISH_BASE = [-13, 5];                          // where it comes out: under the tail
 function stepDish(dt) {
@@ -572,7 +579,7 @@ function stepDish(dt) {
   const g = dishGeo();
   if (dish.t >= dishTimes()[5]) { dish = null; return; }
   if (g && g.key && (dish.wt = (dish.wt || 0) - dt) <= 0) {   // keyed: radio waves off the dish
-    dish.wt = 0.05;
+    dish.wt = Math.min(0.05, 0.45 * dish.unit);      // a dot is still a burst when it is keyed fast
     const rot = birdRot(), L = 11 * g.ext + 9;
     const lx = DISH_BASE[0] + Math.cos(g.ang) * L, ly = DISH_BASE[1] + Math.sin(g.ang) * L;
     waves.push({ x: birdX + lx * Math.cos(rot) - ly * Math.sin(rot), y: bird.y + lx * Math.sin(rot) + ly * Math.cos(rot), a: g.ang + rot, r: 2, t: 0 });
@@ -608,12 +615,23 @@ function drawMorseHud() {                           // what it has sent so far, 
   if (!dish || dead) return;
   const u = dishU(), T = dishTimes();
   if (u < 0 || dish.t > T[4]) return;
-  let n = 0; while (n < MPLAN.done.length && MPLAN.done[n] <= u) n++;
-  const sent = DISH.msg.slice(0, n).trim();
+  const P = dish.plan, msg = dish.msg;
+  let n = 0; while (n < P.done.length && P.done[n] <= u) n++;
   let cur = "";
-  for (const o of MPLAN.on) if (o[2] === n && o[0] <= u) cur += MORSE[DISH.msg[n]][o[3]];
-  outlineText(sent.length ? sent : "TRANSMITTING", W / 2, 110, "#9fffb0", F.hud);
-  if (cur) outlineText(cur, W / 2, 128, "#ffffff", F.hud);
+  for (const o of P.on) if (o[2] === n && o[0] <= u) cur += MORSE[msg[n]][o[3]];
+  ctx.font = F.hud;                                  // wrapped to the screen: the line it is on, and the one before
+  const lines = [""];
+  for (const w of msg.split(" ")) {
+    const L = lines[lines.length - 1], t = L ? L + " " + w : w;
+    if (L && ctx.measureText(t).width > W - 24) lines.push(w); else lines[lines.length - 1] = t;
+  }
+  let k = 0, at = 0;                                 // which line the sent text has reached
+  while (k < lines.length - 1 && at + lines[k].length + 1 <= n) { at += lines[k].length + 1; k++; }
+  const sentK = msg.slice(at, n).trim(), y0 = 110;
+  if (k > 0) outlineText(lines[k - 1], W / 2, y0, "#9fffb0", F.hud);
+  outlineText(sentK.length || k > 0 ? sentK || " " : "TRANSMITTING", W / 2, k > 0 ? y0 + 18 : y0, "#9fffb0", F.hud);
+  const yc = k > 0 ? y0 + 36 : y0 + 18;
+  if (cur) outlineText(cur, W / 2, yc, "#ffffff", F.hud);
 }
 
 const C = {
@@ -723,7 +741,7 @@ function reset() {
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; homeX = BIRD_X; flyT = 0; stageN = 1; stageT = 9; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; sparks = []; heatFx();
-  dish = abducted ? { t: 0 } : null; waves = [];   // they left something in it
+  dish = abducted ? makeDish() : null; waves = [];   // they left something in it
   struck = false; grabbed = false; abducted = false;
   quake = null; quakeK = 0; fallen = []; cracks = []; rocks = [];
   ramp(0); gspd = speed;

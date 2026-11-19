@@ -435,7 +435,7 @@ function todName() {
 /* ---------- now and then, at night, a flying saucer. It drifts in, hangs there bobbing, maybe
    shines its beam on the ground for a look, and goes. Once in a while it comes for the bird:
    it slides over it, locks on, and the bird goes up the beam and is never seen again. ---------- */
-const UFO = { at: [3, 35], every: [35, 70], abductP: 0.2 };   // s into the dark it comes (once a night); ?tod: s of night between visits; the share that come for the bird
+const UFO = { at: [0.05, 0.4], every: [35, 70], abductP: 0.2 };   // how far into the night it comes (once a night); ?tod: s of night between visits; the share that come for the bird
 const UFO_ROWS = [
   ".........GGGGGG.........",
   "........GGAAAAGG........",
@@ -448,7 +448,8 @@ const UFO_ROWS = [
   "......KKUUUUUUUUKK......"];
 const UFO_PAL = { G: "#8fd8ff", A: "#6ee06e", E: "#101010", H: "#e6ebf2", M: "#9aa4b2", K: "#4a5260", U: "#b8ffc0" };
 const UFO_LIGHTS = ["#ff4a4a", "#ffd84a", "#4affff"];
-let ufo = null, ufoNext = randIn(UFO.at), ufoNight = null, abducted = false;
+const ufoAt = () => randIn(UFO.at) * DAY.len * DAY.night;
+let ufo = null, ufoNext = ufoAt(), ufoNight = null, abducted = false;
 function stepUfo(dt) {
   if (!ufo) {
     if (NOCLOCK || FLAIR_MUL <= 0 || nightK < 0.7 || dead || ts.I > 0.05 || rainK > 0.4 || quake) return;
@@ -456,7 +457,7 @@ function stepUfo(dt) {
     if (!TODREAL && ufoNight === night) return;
     if ((ufoNext -= dt * FLAIR_MUL) > 0) return;
     ufoNight = night;
-    ufoNext = TODREAL ? randIn(UFO.every) : randIn(UFO.at);   // the real night is hours long: now and then through it
+    ufoNext = TODREAL ? randIn(UFO.every) : ufoAt();   // the real night is hours long: now and then through it
     const dir = sgn();
     ufo = { dir, x: dir > 0 ? -30 : W + 30, y: 40 + Math.random() * 50, t: 0, st: "in", beam: 0, beamOn: false,
             hx: W * (0.3 + 0.5 * Math.random()), hy: 46 + Math.random() * 60, hold: 3 + Math.random() * 3,

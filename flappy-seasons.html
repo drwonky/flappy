@@ -69,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r21</div>
+<div id="hud">seasons r22</div>
 
 <script>
 "use strict";
@@ -3229,7 +3229,7 @@ function draw() {
   if (dead && offT > 0) {
     ctx.fillStyle = "rgba(20,32,15,.92)";
     ctx.fillRect(W / 2 - 76, H / 2 - 40, 152, 80);
-    txt("CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
+    txt(struck ? "ZAPPED" : grabbed ? "SNATCHED" : "CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
     txt(struck ? "struck by lightning" : grabbed ? "taken by a hawk" : "score " + score, W / 2, H / 2 + 8, struck ? "#cfd8ff" : grabbed ? "#ffd27a" : "#9fb0bd", F.hud, "center");
     txt("restarting...", W / 2, H / 2 + 26, "#9fb0bd", F.hud, "center");
   }

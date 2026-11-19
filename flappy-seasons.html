@@ -69,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r23</div>
+<div id="hud">seasons r24</div>
 
 <script>
 "use strict";
@@ -316,6 +316,302 @@ function pickSeason() {                            // a random season, by weight
   return seasonI;
 }
 
+/* ============================================================
+   TIME OF DAY - the sun comes up on the left, crosses the sky and goes down
+   on the right, and the night comes: the moon, the stars wheeling slowly
+   round, a shooting star now and then, and the odd flying saucer. A day is
+   DAY.len s (?daylen=), a bit over a third of it night. ?tod follows the
+   clock (and the moon) of the device watching; ?noclock keeps the old endless
+   day with the sun swinging to and fro; ?hour=N starts at that hour.
+   ============================================================ */
+const qflag = k => new RegExp("[?&]" + k + "(=|&|$)").test(location.search);
+const NOCLOCK = qflag("noclock"), TODREAL = !NOCLOCK && qflag("tod");
+const DAY = { len: qnum("daylen") > 0 ? qnum("daylen") : 240, night: 0.36, horizon: 330, top: 48 };
+let hour = qnum("hour") !== null ? ((qnum("hour") % 24) + 24) % 24 : isFinite(saved.hour) ? saved.hour : 8;
+let sunEl = 1, dayK = 1, nightK = 0, duskK = 0, dayN = 0;   // sun height -1..1; full day, full night, sunrise/sunset glow (0..1)
+function realHour() { const d = new Date(); return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600; }
+function stepClock(dt) {
+  if (NOCLOCK) return;
+  if (TODREAL) hour = realHour();
+  else {
+    const day = hour >= 6 && hour < 18;           // 12 hours of day, 12 of night, at different paces
+    hour += dt * 12 / (DAY.len * (day ? 1 - DAY.night : DAY.night));
+    if (hour >= 24) { hour -= 24; dayN++; }
+  }
+  sunEl = Math.sin(Math.PI * (hour - 6) / 12);
+  const sm = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+  dayK = sm((sunEl + 0.12) / 0.24);
+  nightK = sm((-sunEl - 0.02) / 0.3);
+  duskK = sm(1 - Math.abs(sunEl - 0.03) / 0.3);
+}
+function skyArc(th) { return [W / 2 - Math.cos(th) * (W / 2 - 26), DAY.horizon - (DAY.horizon - DAY.top) * Math.sin(th)]; }   // 0 rising left, PI setting right
+const DUSK_SKY = ["#3c3a7a", "#8a4c86", "#e8705a", "#ffb060"], NIGHT_SKY = ["#05081a", "#0a102c", "#111c42", "#1a2754"];
+function todSky() {                                 // the sky's colours, with the sunrise and the night over them
+  if (NOCLOCK) return;
+  ["skyA", "skyB", "skyC", "skyD"].forEach((k, i) => { C[k] = mixHex(mixHex(C[k], DUSK_SKY[i], 0.85 * duskK), NIGHT_SKY[i], nightK); });
+}
+function nightVeil() {                              // the world goes golden, then dark (only what is painted so far)
+  if (NOCLOCK) return;
+  const a = 0.6 * (1 - dayK), g = 0.16 * duskK * dayK;
+  if (a < 0.005 && g < 0.005) return;
+  ctx.save(); ctx.globalCompositeOperation = "source-atop";
+  if (g >= 0.005) { ctx.fillStyle = "rgba(255,110,50," + g.toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
+  if (a >= 0.005) { ctx.fillStyle = "rgba(8,12,40," + a.toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
+  ctx.restore();
+}
+function skyBehind() {                              // last of all, BEHIND everything: moon, shooting stars, stars, sky
+  ctx.save(); ctx.globalCompositeOperation = "destination-over";   // (what goes first stays in front)
+  if (!NOCLOCK) { drawMoon(); drawShooting(); drawStars(); }
+  sky();
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+}
+function moonPhase() {                              // 0 new, .5 full
+  if (TODREAL) { const d = (Date.now() / 864e5 - 10962.76) / 29.530588; return d - Math.floor(d); }   // since the new moon of 6 Jan 2000
+  return 0.5 + 0.33 * Math.sin(dayN * 0.9 + 0.4);   // waxing and waning night to night, never quite new
+}
+const MARIA = [[-5, -4, 3, 2], [1, -6, 3, 2], [2, 1, 4, 3], [-3, 3, 2, 2], [-7, 0, 2, 2]];
+function drawMoon() {
+  const th = Math.PI * (hour - 18) / 12;
+  if (Math.sin(th) < -0.05) return;
+  const [cx0, cy0] = skyArc(th), cx = Math.round(cx0), cy = Math.round(cy0), r = 11;
+  const p = moonPhase(), k = Math.cos(2 * Math.PI * p), vis = 0.3 + 0.7 * (1 - dayK);
+  const span = y => { const w = Math.sqrt(r * r - (y + 0.5) * (y + 0.5)); return p < 0.5 ? [w * k, w] : [-w, -w * k]; };
+  ctx.globalAlpha = vis;
+  ctx.fillStyle = "#cfcab0";                        // the seas, where they are lit
+  for (const [mx, my, mw, mh] of MARIA) for (let y = my; y < my + mh; y++) {
+    const [a, b] = span(y), x0 = Math.max(mx, Math.ceil(a)), x1 = Math.min(mx + mw, Math.floor(b));
+    if (x1 > x0) ctx.fillRect(cx + x0, cy + y, x1 - x0, 1);
+  }
+  ctx.fillStyle = "#f4f1dc";                        // the lit part
+  for (let y = -r; y < r; y++) { const [a, b] = span(y), x0 = Math.round(a), x1 = Math.round(b); if (x1 > x0) ctx.fillRect(cx + x0, cy + y, x1 - x0, 1); }
+  ctx.globalAlpha = vis * 0.9; disc(cx, cy, r, "#242a48");   // the dark side, faintly
+  ctx.globalAlpha = 0.12 * nightK; disc(cx, cy, r + 8, "#c8d4ff");
+  ctx.globalAlpha = 0.06 * nightK; disc(cx, cy, r + 18, "#c8d4ff");
+  ctx.globalAlpha = 1;
+}
+const STARS = [];
+for (let i = 0; i < Math.round(W * 0.45); i++)
+  STARS.push({ x: hash1(i * 3.1 + 0.7) * W, y: 6 + Math.pow(hash1(i * 7.3 + 1.9), 1.3) * (DAY.horizon - 30), b: hash1(i * 1.7 + 4.2), ph: hash1(i * 5.9) * 6.28, f: 1 + hash1(i * 2.3) * 3 });
+function drawStars() {
+  if (nightK < 0.01) return;
+  const drift = hour * W / 48;                      // the sky wheels slowly round
+  for (const s of STARS) {
+    const a = nightK * (0.3 + 0.7 * s.b) * (0.7 + 0.3 * Math.sin(airClock * s.f + s.ph)) * Math.min(1, (DAY.horizon - s.y) / 70);
+    const x = Math.round(((s.x - drift) % W + W) % W), y = Math.round(s.y);
+    ctx.globalAlpha = a; ctx.fillStyle = s.b > 0.8 ? "#ffffff" : s.b > 0.5 ? "#dfe6ff" : "#9fa8d8";
+    ctx.fillRect(x, y, 1, 1);
+    if (s.b > 0.95) { ctx.globalAlpha = a * 0.45; ctx.fillRect(x - 1, y, 3, 1); ctx.fillRect(x, y - 1, 1, 3); }   // the bright ones glint
+  }
+  ctx.globalAlpha = 1;
+}
+let shooters = [], shootNext = 3;
+function stepShooting(dt) {
+  if (!NOCLOCK && nightK > 0.6 && (shootNext -= dt) <= 0) {
+    shootNext = randIn([4, 14]);
+    const dir = sgn(), v = 280 + Math.random() * 180, a = 0.25 + Math.random() * 0.4;
+    shooters.push({ x: W * (dir > 0 ? 0.05 + 0.6 * Math.random() : 0.35 + 0.6 * Math.random()), y: 8 + Math.random() * 110,
+                    vx: dir * v * Math.cos(a), vy: v * Math.sin(a), t: 0, life: 0.45 + Math.random() * 0.5, len: 16 + Math.random() * 26 });
+  }
+  for (const s of shooters) { s.t += dt; s.x += s.vx * dt; s.y += s.vy * dt; }
+  shooters = shooters.filter(s => s.t < s.life);
+}
+function drawShooting() {
+  for (const s of shooters) {
+    const u = s.t / s.life, f = Math.min(1, u * 6) * (1 - u) * nightK, sp = Math.hypot(s.vx, s.vy), n = Math.ceil(s.len * Math.min(1, u * 4));
+    for (let i = 0; i < n; i++) {                   // head first: it stays in front of its own tail
+      ctx.globalAlpha = f * (1 - i / n); ctx.fillStyle = i < 3 ? "#ffffff" : "#bcd0ff";
+      ctx.fillRect(Math.round(s.x - s.vx / sp * i), Math.round(s.y - s.vy / sp * i), 1, i < 2 ? 2 : 1);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+function todName() {
+  const h = hour;
+  return h >= 4.8 && h < 6.6 ? ["DAWN", "#ffb0a0"] : h < 10.5 && h >= 6.6 ? ["MORNING", "#fff0a0"] : h >= 10.5 && h < 13.5 ? ["MIDDAY", "#ffffff"]
+       : h >= 13.5 && h < 17.4 ? ["AFTERNOON", "#ffe0a0"] : h >= 17.4 && h < 19.2 ? ["DUSK", "#ff9a7a"] : ["NIGHT", "#aab8ff"];
+}
+
+/* ---------- now and then, at night, a flying saucer. It drifts in, hangs there bobbing, maybe
+   shines its beam on the ground for a look, and goes. Once in a while it comes for the bird:
+   it slides over it, locks on, and the bird goes up the beam and is never seen again. ---------- */
+const UFO = { every: [35, 70], abductP: 0.2, first: 8 };   // s of night between visits; the share that come for the bird
+const UFO_ROWS = [
+  ".........GGGGGG.........",
+  "........GGAAAAGG........",
+  ".......GGAEAAEAGG.......",
+  ".......GGAAAAAAGG.......",
+  "....KHHHHHHHHHHHHHHK....",
+  "..KHMMMMMMMMMMMMMMMMHK..",
+  "KMMLMMMLMMMLMMMLMMMLMMMK",
+  "..KKMMMMMMMMMMMMMMMMKK..",
+  "......KKUUUUUUUUKK......"];
+const UFO_PAL = { G: "#8fd8ff", A: "#6ee06e", E: "#101010", H: "#e6ebf2", M: "#9aa4b2", K: "#4a5260", U: "#b8ffc0" };
+const UFO_LIGHTS = ["#ff4a4a", "#ffd84a", "#4affff"];
+let ufo = null, ufoNext = UFO.first, abducted = false;
+function stepUfo(dt) {
+  if (!ufo) {
+    if (NOCLOCK || FLAIR_MUL <= 0 || nightK < 0.7 || dead || ts.I > 0.05 || rainK > 0.4 || quake) return;
+    if ((ufoNext -= dt * FLAIR_MUL) > 0) return;
+    ufoNext = randIn(UFO.every);
+    const dir = sgn();
+    ufo = { dir, x: dir > 0 ? -30 : W + 30, y: 40 + Math.random() * 50, t: 0, st: "in", beam: 0, beamOn: false,
+            hx: W * (0.3 + 0.5 * Math.random()), hy: 46 + Math.random() * 60, hold: 3 + Math.random() * 3,
+            scan: Math.random() < 0.6, abduct: Math.random() < UFO.abductP, hunt: 0, lock: 0 };
+    return;
+  }
+  const u = ufo;
+  u.t += dt;
+  const bob = 3 * Math.sin(u.t * 2.3);
+  const toward = (x, y, v) => { const dx = x - u.x, dy = y - u.y, d = Math.hypot(dx, dy); if (d <= v * dt) { u.x = x; u.y = y; return true; } u.x += dx / d * v * dt; u.y += dy / d * v * dt; return false; };
+  if (u.st === "in") { if (toward(u.hx, u.hy, 110)) u.st = "hover"; }
+  else if (u.st === "hover") {
+    u.hold -= dt; u.y = u.hy + bob;
+    u.beamOn = u.scan && u.hold > 0.7 && u.hold < 2.6;       // a look at the ground below
+    if (u.beamOn && u.beam > 0.8 && Math.random() < 25 * dt) spawnDust(u.x + (Math.random() - 0.5) * 40, SKY - 2, -40 - Math.random() * 50);
+    if (u.hold <= 0) { u.beamOn = false; u.st = u.abduct && !dead && !quake ? "hunt" : "out"; }
+  } else if (u.st === "hunt") {                              // over the bird, matching it, then the beam
+    const tx = birdX, ty = Math.max(30, bird.y - 80);
+    const e = 1 - Math.exp(-dt * 2.4);
+    u.x += (tx - u.x) * e + (STAGE ? vrun * dt : 0); u.y += (ty + bob - u.y) * e;   // (on a TV stage the bird is moving: keep pace)
+    u.hunt += dt;
+    u.lock = Math.abs(u.x - tx) < 10 && Math.abs(u.y - ty) < 26 ? u.lock + dt : 0;
+    if (dead || quake || u.hunt > 9) u.st = "out";
+    else if (u.lock > 0.3) { u.st = "lift"; u.beamOn = true; u.beam = 1; u.bx0 = birdX; u.by0 = bird.y; abducted = true; die(); flash = 0.3; }
+  } else if (u.st === "lift") {                              // up the beam it goes
+    if (deadT > 2) { u.beamOn = false; u.st = "away"; u.vy = -20; }
+  } else if (u.st === "away") {                              // and gone, faster than anything ever flew
+    u.vy -= 700 * dt; u.y += u.vy * dt; u.x += u.dir * 30 * dt;
+    if (u.y < -40) ufo = null;
+  } else {                                                   // "out": on across and off the other side
+    u.beamOn = false; u.x += u.dir * 140 * dt; u.y -= 18 * dt;
+    if (u.x < -50 || u.x > W + 50 || u.y < -30) ufo = null;
+  }
+  if (ufo) {
+    u.beam += ((u.beamOn ? 1 : 0) - u.beam) * Math.min(1, 6 * dt);
+    if (nightK < 0.4 && (u.st === "in" || u.st === "hover" || u.st === "hunt")) u.st = "out";   // daybreak: off it goes
+  }
+}
+function liftK() { return ufo && ufo.st === "lift" ? smooth(deadT / 1.8) : 1; }
+function stepAbducted() {                           // the bird, rising and turning in the beam
+  if (ufo && ufo.st === "lift") {
+    const k = liftK();
+    birdX = ufo.bx0 + (ufo.x - ufo.bx0) * k; bird.y = ufo.by0 + (ufo.y + 4 - ufo.by0) * k;
+    frameIdx = ((deadT * 10) | 0) % 4;
+    return false;
+  }
+  return true;                                       // gone: on to the next round
+}
+function drawUfo() {                                // in front of everything but the HUD
+  const u = ufo;
+  if (!u) return;
+  if (u.beam > 0.01) {                               // the beam: a cone of pale green, bands running up it
+    const top = Math.round(u.y + 8), bot = u.st === "lift" ? Math.round(u.by0 + 16) : SKY, cone = u.st === "lift" ? 16 : 26;
+    for (let y = top; y < bot; y += 2) {
+      const k = (y - top) / Math.max(1, bot - top), hw = 7 + k * cone;
+      const band = (((y + airClock * 50) % 14) + 14) % 14 < 3;
+      ctx.globalAlpha = (band ? 0.34 : 0.18) * u.beam;
+      ctx.fillStyle = "#b8ffc0"; ctx.fillRect(Math.round(u.x - hw), y, Math.round(2 * hw), 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+  const q = 2, x0 = Math.round(u.x - 24), y0 = Math.round(u.y - 9);
+  let li = 0;
+  const lit = (airClock * 8) | 0;
+  for (let r = 0; r < UFO_ROWS.length; r++) for (let c = 0; c < 24; c++) {
+    const ch = UFO_ROWS[r][c];
+    if (ch === ".") continue;
+    ctx.globalAlpha = ch === "G" ? 0.85 : 1;
+    ctx.fillStyle = ch === "L" ? UFO_LIGHTS[(li++ + lit) % 3] : UFO_PAL[ch];
+    ctx.fillRect(x0 + c * q, y0 + r * q, q, q);
+  }
+  ctx.globalAlpha = 0.25 + 0.15 * Math.sin(airClock * 9);   // the glow under it
+  ctx.fillStyle = "#b8ffc0"; ctx.fillRect(x0 + 14, y0 + 18, 20, 2);
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- the round after an abduction: they have left something in the bird. A little dish
+   pops out of its tail, swings round to the sky and taps out HELLO WORLD in morse. ---------- */
+const MORSE = { H: "....", E: ".", L: ".-..", O: "---", W: ".--", R: ".-.", D: "-.." };
+const DISH = { msg: "HELLO WORLD", unit: 0.14, wait: 1.5, out: 0.45, aim: 0.8, hold: 1.6, back: 0.5, aimW: -2.25 };
+const MPLAN = (() => {                              // key-downs [from, to, letter, symbol] in units; when each letter is done
+  const on = [], done = []; let t = 0;
+  for (let i = 0; i < DISH.msg.length; i++) {
+    const ch = DISH.msg[i];
+    if (ch === " ") { t += 4; done.push(t); continue; }   // 3 after the letter + 4 = the 7 between words
+    const code = MORSE[ch];
+    for (let j = 0; j < code.length; j++) { const d = code[j] === "." ? 1 : 3; on.push([t, t + d, i, j]); t += d + 1; }
+    t += 2; done.push(t);                           // 1 + 2 = the 3 between letters
+  }
+  return { on, done, len: t };
+})();
+let dish = null, waves = [];
+function dishTimes() { const a = DISH.wait, b = a + DISH.out, c = b + DISH.aim, d = c + MPLAN.len * DISH.unit, e = d + DISH.hold; return [a, b, c, d, e, e + DISH.back]; }
+function dishU() { return dish ? (dish.t - dishTimes()[2]) / DISH.unit : -1; }   // morse units into the message
+function dishGeo() {                                // how far out (0..1), its angle in the bird's frame, keyed?
+  if (!dish) return null;
+  const [a, b, c, d, e, f] = dishTimes(), t = dish.t;
+  if (t < a || t >= f) return null;
+  const pop = (t - a) / DISH.out;
+  const ext = t < b ? smooth(pop) * (1 + 0.35 * Math.sin(Math.PI * pop)) : t < e ? 1 : 1 - smooth((t - e) / DISH.back);
+  const back = -Math.PI, sky = DISH.aimW - birdRot();       // straight out behind, then up at the sky whatever the bird does
+  const w = t < b ? 0 : t < e ? smooth((t - b) / DISH.aim) : 1 - smooth((t - e) / DISH.back);
+  const u = (t - c) / DISH.unit;
+  return { ext, ang: back + (sky - back) * w, key: t >= c && t < d && MPLAN.on.some(o => u >= o[0] && u < o[1]) };
+}
+const DISH_BASE = [-13, 5];                          // where it comes out: under the tail
+function stepDish(dt) {
+  for (const w of waves) { w.t += dt; w.r += 140 * dt; w.x -= gspd * 0.5 * dt; }
+  waves = waves.filter(w => w.t < 0.75);
+  if (!dish || dead) return;
+  dish.t += dt;
+  const g = dishGeo();
+  if (dish.t >= dishTimes()[5]) { dish = null; return; }
+  if (g && g.key && (dish.wt = (dish.wt || 0) - dt) <= 0) {   // keyed: radio waves off the dish
+    dish.wt = 0.05;
+    const rot = birdRot(), L = 11 * g.ext + 9;
+    const lx = DISH_BASE[0] + Math.cos(g.ang) * L, ly = DISH_BASE[1] + Math.sin(g.ang) * L;
+    waves.push({ x: birdX + lx * Math.cos(rot) - ly * Math.sin(rot), y: bird.y + lx * Math.sin(rot) + ly * Math.cos(rot), a: g.ang + rot, r: 2, t: 0 });
+  }
+}
+function drawDish() {                               // in the bird's frame, before the bird: it comes out from under it
+  const g = !dead && dishGeo();
+  if (!g || g.ext < 0.02) return;
+  ctx.save(); ctx.translate(DISH_BASE[0], DISH_BASE[1]); ctx.rotate(g.ang);
+  const L = Math.round(11 * g.ext), s = Math.max(0, Math.min(1, (g.ext - 0.3) / 0.7));
+  ctx.fillStyle = "#6a727e"; ctx.fillRect(0, -1, L + 1, 2);                // the stalk
+  if (s > 0) {
+    for (let j = -8; j <= 8; j++) {                                          // the bowl, open toward where it points
+      const x = L + Math.round(j * j / 10 * s), y = Math.round(j * s);
+      ctx.fillStyle = "#2e343c"; ctx.fillRect(x - 2, y, 2, 1);
+      ctx.fillStyle = Math.abs(j) > 5 ? "#b4bcc6" : "#f4f6f9"; ctx.fillRect(x, y, 2, 1);
+    }
+    ctx.fillStyle = "#6a727e"; ctx.fillRect(L + 1, 0, Math.round(8 * s), 1);   // the feed arm...
+    ctx.fillStyle = g.key ? "#ff4040" : "#7a2020"; ctx.fillRect(L + Math.round(8 * s), -1, 3, 3);   // ...and the transmitter, lit when keyed
+    if (g.key) { ctx.globalAlpha = 0.4; ctx.fillStyle = "#ff8080"; ctx.fillRect(L + Math.round(8 * s) - 2, -3, 7, 7); ctx.globalAlpha = 1; }
+  }
+  ctx.restore();
+}
+function drawWaves() {                              // arcs going out from the dish
+  for (const w of waves) {
+    ctx.globalAlpha = 1 - w.t / 0.75; ctx.fillStyle = "#b8ffc8";
+    const n = 3 + Math.round(w.r / 18);           // the arc widens as it goes
+    for (let k = -n; k <= n; k++) { const a = w.a + k * 0.13; ctx.fillRect(Math.round(w.x + Math.cos(a) * w.r), Math.round(w.y + Math.sin(a) * w.r), 2, 2); }
+  }
+  ctx.globalAlpha = 1;
+}
+function drawMorseHud() {                           // what it has sent so far, and the letter going out now
+  if (!dish || dead) return;
+  const u = dishU(), T = dishTimes();
+  if (u < 0 || dish.t > T[4]) return;
+  let n = 0; while (n < MPLAN.done.length && MPLAN.done[n] <= u) n++;
+  const sent = DISH.msg.slice(0, n).trim();
+  let cur = "";
+  for (const o of MPLAN.on) if (o[2] === n && o[0] <= u) cur += MORSE[DISH.msg[n]][o[3]];
+  outlineText(sent.length ? sent : "TRANSMITTING", W / 2, 110, "#9fffb0", F.hud);
+  if (cur) outlineText(cur, W / 2, 128, "#ffffff", F.hud);
+}
+
 const C = {
   skyA:"#a8502a", skyB:"#c56a30", skyC:"#dc8c3c", skyD:"#eeb456",   // scorched, smoky sky
   cloud:"#8a5a44", hill:"#b0683a", hillDark:"#7e4628",               // smoke banks, mesas
@@ -423,7 +719,8 @@ function reset() {
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; homeX = BIRD_X; flyT = 0; stageN = 1; stageT = 9; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; sparks = []; heatFx();
-  struck = false; grabbed = false;
+  dish = abducted ? { t: 0 } : null; waves = [];   // they left something in it
+  struck = false; grabbed = false; abducted = false;
   quake = null; quakeK = 0; fallen = []; cracks = []; rocks = [];
   ramp(0); gspd = speed;
   firstPipes();
@@ -460,6 +757,8 @@ function step(dt) {
   airClock += dt;
   stepDisco(dt);
   stepSeason(dt);                  // the seasons turn through the crash too
+  stepClock(dt); stepShooting(dt); // and the days
+  stepDish(dt);
   setWindMul(envWind() * windX * SFX.wind);
   if (windMul > 0) stepWind(dt);   // the wind keeps blowing through the crash
   stepSun(dt);                     // the sun, the smoke and the dust go on through the crash
@@ -583,6 +882,8 @@ function nextStage() {
     const h = hawk; h.x -= S; h.cx -= S;
     for (const P of [h.P0, h.P1, h.P2]) if (P) P[0] -= S;
   }
+  if (ufo) { ufo.x -= S; ufo.hx -= S; if (ufo.bx0 !== undefined) ufo.bx0 -= S; }
+  for (const w of waves) w.x -= S;
   pipes = pipes.filter(p => p.x + PIPE_W + CAP_X > -REACH);
   stageN++; stageT = 0;
 }
@@ -591,10 +892,10 @@ function birdRot() { return bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620
 
 function die(ix, iy, kind) {
   dead = true; deadT = 0; flash = 1;
-  if (!struck && !grabbed) startBoom(ix === undefined ? birdX : ix, iy === undefined ? bird.y : iy, kind || "pipe");
+  if (!struck && !grabbed && !abducted) startBoom(ix === undefined ? birdX : ix, iy === undefined ? bird.y : iy, kind || "pipe");
   deathRot = birdRot();
   bird.vy = 0;
-  spawnFeathers(birdX, bird.y, struck || grabbed ? 34 : 100, struck || grabbed ? 1 : 1.5);   // a crash blows it apart
+  spawnFeathers(birdX, bird.y, abducted ? 6 : struck || grabbed ? 34 : 100, abducted ? 0.4 : struck || grabbed ? 1 : 1.5);   // a crash blows it apart
   const chips = Math.round(30 * Math.min(1, rime + glaze));   // and the ice shatters off
   for (let i = 0; i < chips; i++) {
     const a = Math.random() * Math.PI * 2, v = 90 + Math.random() * 220;
@@ -660,6 +961,7 @@ function makeBolts() {
 
 function stepDeath(dt) {
   deadT += dt;
+  if (abducted) { if (stepAbducted()) { offT += dt; if (offT > D_REST) reset(); } return; }   // up the beam
   if (grabbed) {                                // carried off in the talons, struggling
     if (hawk) { birdX = hawk.x; bird.y = hawk.y + hawkHold(hawkQ(hawk)); frameIdx = ((deadT * 14) | 0) % 4; }
     else { offT += dt; if (offT > D_REST) reset(); }
@@ -696,7 +998,7 @@ function wander(o, dt, lo, hi, every, tau) {          // a value drifting betwee
 }
 function stepSun(dt) {
   sunPh += dt * 2 * Math.PI / SUN.period;
-  sunSX = SUN.swing * Math.sin(sunPh);
+  sunSX = NOCLOCK ? SUN.swing * Math.sin(sunPh) : -SUN.swing * Math.cos(Math.PI * (hour - 6) / 12);   // long shadows morning and evening
   wander(dustW, dt, 0.5, 1.7, 10, 3);                  // dust storms come and go
   wander(smokeW, dt, 0.5, 1.5, 14, 5);                 // so does the smoke from the fires
   if (skyEv.t > 0) { skyEv.t -= dt; if (skyEv.t <= 0) { skyEv.target = 1; skyEv.next = randIn(SKYEV.every); } }
@@ -838,11 +1140,11 @@ function groundSplash() {                          // what the drop throws up: m
 }
 function bowAlpha() {                              // fades in, holds, fades out - and only with the sun out
   if (bow <= 0) return 0;
-  return Math.min(1, bow / 2.5, (10 - bow) / 1.5) * Math.max(0, Math.min(1, (skyEv.k - 0.6) / 0.3)) * Math.min(1, SW[0] * 2);
+  return Math.min(1, bow / 2.5, (10 - bow) / 1.5) * Math.max(0, Math.min(1, (skyEv.k - 0.6) / 0.3)) * Math.min(1, SW[0] * 2) * dayK;
 }
 function cloudCover() { return Math.max(0, Math.min(1, (1 - skyEv.k) / 0.6)); }   // 0 clear .. 1 a thick bank
 function blazeK() { return Math.max(0, (skyEv.k - 1) / (SKYEV.blaze - 1)); }
-function sunXY() { return [W / 2 + sunSX * 112, 48 + 40 * Math.abs(sunSX)]; }   // lower when it leans
+function sunXY() { if (!NOCLOCK) return skyArc(Math.PI * (hour - 6) / 12); return [W / 2 + sunSX * 112, 48 + 40 * Math.abs(sunSX)]; }   // lower when it leans
 /* SHADOWS. A rect [x0,x1] x [ya,yb] shades row y on x0-d*sx .. x1-d*sx for every
    height d it rises toward the sun before reaching the rect (d from y-yb to y-ya).
    The same spans are painted and used for the bird, so the shade you see is the
@@ -913,10 +1215,10 @@ function shedIce() {                                   // every wingbeat cracks 
 function heatE() { return Math.min(1, core + 0.6 * skin); }
 function stepHeat(dt) {
   // how much of the bird is in shade: its head, middle and tail feathers
-  for (let i = 0; i < 3; i++) LIT[i] = sunMul > 0 && !inShade(birdX, bird.y + LIT_DY[i]);
+  for (let i = 0; i < 3; i++) LIT[i] = sunMul > 0 && dayK > 0.3 && !inShade(birdX, bird.y + LIT_DY[i]);
   shade = 3 - LIT[0] - LIT[1] - LIT[2]; shade /= 3;
   shadeK += (shade - shadeK) * (1 - Math.exp(-dt / 0.12));
-  const sun = sunK() * SFX.sun * skyEv.k * (1.12 - 0.12 * smokeW.k);   // the season's sun; clouds and smoke take the edge off
+  const sun = sunK() * SFX.sun * skyEv.k * (1.12 - 0.12 * smokeW.k) * dayK;   // the season's sun; clouds and smoke take the edge off
   const wc = windCool() + 1.5 * SFX.snow;              // winter air is cold
   const ins = 1 - Math.min(1, 2 * (rime + glaze));     // the sun's heat goes into melting the ice first
   skin += (HEAT.rate * sun * ins * (1 - shade) - (HEAT.cool * shade * (0.6 + 0.4 * wc) + HEAT.air * wc) * skin) * dt;
@@ -1061,7 +1363,7 @@ function stepCover(dt) {
 }
 function coverCol() { const r = Math.random() * (sandD + snowD); return r < snowD ? "#ffffff" : C.sand; }   // what the wind is lifting
 function saveWorld() {
-  try { localStorage.setItem(SEASON_KEY, JSON.stringify({ t: +(disco ? seasonT / SEASON.len * disco.len0 : seasonT).toFixed(1), sand: +sandD.toFixed(2), snow: +snowD.toFixed(2), ice: +iceD.toFixed(2) })); } catch (e) {}
+  try { localStorage.setItem(SEASON_KEY, JSON.stringify({ t: +(disco ? seasonT / SEASON.len * disco.len0 : seasonT).toFixed(1), sand: +sandD.toFixed(2), snow: +snowD.toFixed(2), ice: +iceD.toFixed(2), hour: +hour.toFixed(2) })); } catch (e) {}
 }
 function pipeCoverH(p) { return coverD() * p.sf; }
 /* the heap on a lip, column i: flat while shallow, then a mound with slumped sides */
@@ -1509,7 +1811,7 @@ const SPR_ZAP = { K: "#fffbe0", Y: "#2a2f7a", D: "#151845", C: "#3a4290", W: "#f
 const cvs = document.getElementById("game");
 const vctx = cvs.getContext("2d", { alpha: false });   // what the viewer sees
 const buf = document.createElement("canvas");             // the scene is painted here
-const ctx = buf.getContext("2d", { alpha: false });
+const ctx = buf.getContext("2d");               // with alpha: the sky is painted in behind it all, last
 const stage = document.getElementById("stage");
 let R = 2, DS = 2;   // R = buffer pixels per logical px (integer), DS = device px per logical px
 
@@ -1580,6 +1882,7 @@ function sky() {
 }
 
 function drawSun() {                              // a pixel disc with two rings of glare
+  if (!NOCLOCK && sunEl < -0.08) return;          // down behind the hills for the night
   const [cx, cy] = sunXY();
   const disc = (r, col, a) => {
     ctx.globalAlpha = a; ctx.fillStyle = col;
@@ -1591,6 +1894,7 @@ function drawSun() {                              // a pixel disc with two rings
   const v = 0.35 + 0.65 * SFX.vis;                   // a pale disc in winter, a blazing one in summer
   disc(40, C.sunGlow, 0.12 * SFX.vis); disc(28, C.sunGlow, 0.22 * SFX.vis); disc(17, C.sun, v);
   disc(17, "#7a4a30", 0.25 * (smokeW.k - 0.5));     // smoke across its face
+  if (!NOCLOCK && duskK > 0.01) { disc(28, "#ff7a3a", 0.25 * duskK); disc(17, "#ff8a3a", 0.55 * duskK); }   // red and low at either end of the day
   const b = blazeK();
   if (b > 0) { disc(54, C.sunGlow, 0.10 * b); disc(22, "#ffffff", 0.5 * b); }   // blazing: a wider, whiter glare
   ctx.globalAlpha = 1;
@@ -1607,7 +1911,7 @@ function drawSun() {                              // a pixel disc with two rings
   }
 }
 function skyLight() {                              // the whole scene dims under cloud, glares in a blaze
-  const c = cloudCover(), b = blazeK();
+  const c = cloudCover(), b = blazeK() * dayK;
   if (c > 0.01) { ctx.fillStyle = "rgba(40,18,10," + (0.22 * c).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY); }
   if (b > 0.01) { ctx.fillStyle = "rgba(255,236,170," + (0.10 * b).toFixed(3) + ")"; ctx.fillRect(0, 0, W, SKY); }
 }
@@ -1652,7 +1956,7 @@ function drawCacti() {                             // saguaros: trunk, ribs, arm
     for (let y = top + 5; y < SKY - 3; y += 6) { ctx.fillRect(x - 6, y, 1, 1); ctx.fillRect(x + 5, y + 3, 1, 1); }
   }
 }
-function shadowCol() { return "rgba(40,22,10," + (0.30 * SFX.vis * Math.min(1.25, skyEv.k)).toFixed(3) + ")"; }   // faint under cloud, and in winter
+function shadowCol() { return "rgba(40,22,10," + (0.30 * SFX.vis * Math.min(1.25, skyEv.k) * dayK).toFixed(3) + ")"; }   // faint under cloud, and in winter
 function drawShadows() {                           // the pipes' shade, painted row by row
   if (Math.abs(sunSX) > 2) return;
   ctx.fillStyle = shadowCol();
@@ -2083,11 +2387,11 @@ function drawHeatHud() {                           // heat (or ice), spelled out
     txt("BIRD " + Math.round(104 + 16 * e) + "F", W - 8, 52, tcol, F.hud, "right");
     ctx.fillStyle = "#c0301a"; ctx.fillRect(bx, by, Math.round(bw * core), 5);
     ctx.fillStyle = "#ffb03a"; ctx.fillRect(bx + Math.round(bw * core), by, Math.round(bw * Math.min(0.6 * skin, 1 - core)), 5);
-    const st = shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : cloudCover() > 0.6 ? "SUN HIDDEN" : SFX.heat < 0.5 ? "WARM SUN" : "IN THE SUN";
+    const st = dayK < 0.3 ? (skin > 0.02 ? "NIGHT - COOLING" : "COOL NIGHT") : shadeK > 0.5 ? (skin > 0.02 ? "SHADE - COOLING" : "IN THE SHADE") : e > 0.6 ? "BAKING IN SUN" : cloudCover() > 0.6 ? "SUN HIDDEN" : SFX.heat < 0.5 ? "WARM SUN" : "IN THE SUN";
     txt(st, W - 8, 78, shadeK > 0.5 ? "#9fe0ff" : "#ffd27a", F.hud, "right");
   }
   const wc = windCool(), c = cloudCover(), b = blazeK();
-  const air = quake ? quakeLabel() : ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : hawk && hawk.st !== "out" && !dead ? ["HAWK ABOUT", "#ffd27a"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
+  const air = quake ? quakeLabel() : ts.I > 0.3 ? ["THUNDERSTORM", "#c8b8ff"] : ufo && !dead ? ["UFO SIGHTED", "#9fffb0"] : hawk && hawk.st !== "out" && !dead ? ["HAWK ABOUT", "#ffd27a"] : rainK > 0.4 ? ["RAIN SHOWER", "#9fd0ff"] : c > 0.5 && dayK > 0.5 ? ["SUN COVERED", "#c8b8ff"] : b > 0.5 && dayK > 0.5 ? ["BLAZING SUN", "#ff8a5a"]
             : wc < 0.6 ? ["STILL AIR", "#ffc070"] : wc > 1.4 ? ["STRONG BREEZE", "#9fe0ff"] : ["BREEZE", "#cfe8f0"];
   txt(air[0], W - 8, 96, air[1], F.hud, "right");
   const fx = Math.round(100 * (1 - flapEff / FLAP));
@@ -2105,10 +2409,17 @@ function drawSeasonHud() {                         // on the ground: SUMMER, or 
     put(SEASON_NAMES[seasonNext], x + Math.round(ctx.measureText("> ").width), SEASON_COLS[seasonNext]);
     ctx.globalAlpha = 1;
   }
-  if (disco) {                                       // and under it, the party clock
+  let y2 = y + 20;
+  if (!NOCLOCK) {                                    // and under it, the time of day
+    const [n, col] = todName();
+    const t = TODREAL ? n + " " + String(Math.floor(hour)).padStart(2, "0") + ":" + String(Math.floor(hour % 1 * 60)).padStart(2, "0") : n;
+    txt(t, 9, y2 + 1, "rgba(0,0,0,.45)", F.hud, "left"); txt(t, 8, y2, col, F.hud, "left");
+    y2 += 20;
+  }
+  if (disco) {                                       // and the party clock
     const t = "DISCO " + Math.ceil(disco.t) + "  X" + DISCO.env;
-    txt(t, 9, y + 21, "rgba(0,0,0,.45)", F.hud, "left");
-    txt(t, 8, y + 20, ["#ff4fd8", "#ffe14a", "#4fe8ff", "#8aff5a"][(airClock * 5 | 0) % 4], F.hud, "left");
+    txt(t, 9, y2 + 1, "rgba(0,0,0,.45)", F.hud, "left");
+    txt(t, 8, y2, ["#ff4fd8", "#ffe14a", "#4fe8ff", "#8aff5a"][(airClock * 5 | 0) % 4], F.hud, "left");
   }
 }
 
@@ -2119,6 +2430,12 @@ function drawBird() {
   if (!dead) {
     ctx.translate(Math.round(birdX), Math.round(bird.y));
     ctx.rotate(birdRot());
+    drawDish();
+  } else if (abducted) {                        // turning slowly, smaller and smaller, into the ship
+    const k = liftK();
+    if (k >= 0.98) { ctx.restore(); return; }
+    ctx.translate(Math.round(birdX), Math.round(bird.y));
+    ctx.rotate(deadT * 3); ctx.scale(1 - 0.7 * k, 1 - 0.7 * k);
   } else if (grabbed) {
     ctx.translate(Math.round(birdX), Math.round(bird.y));
     ctx.rotate(0.25 * Math.sin(deadT * 22));
@@ -2232,7 +2549,7 @@ function spr(rows, pal, x, y, flip, k, clipY, s = 1) {   // a cell is s logical 
 function stepFlair(dt) {
   if (FLAIR_MUL > 0) for (const k in flNext)
     if ((flNext[k] -= dt * FLAIR_MUL * (k === "gopher" && ts.I > 0.4 ? 4 : 1)) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
-  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt); stepPoles(dt);
+  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt); stepPoles(dt); stepUfo(dt);
 }
 function trySpawn(k) {
   const r = Math.random(), has = kind => flocks.some(f => f.kind === kind);
@@ -2627,8 +2944,8 @@ const HAWK_DN = ["..............", "..............", "..............", "........
 const HAWK_STOOP = ["..............", "..............", "..............", "....DDDDDD....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "......LLLL.B..", "..............", ".............."];
 const HAWK_GRAB = ["..............", "..............", "..DD..........", "...DDDDDD.....", "TTBBBBBBBBBBB.", ".TTBBLLLLLBEBY", "......LLLL.B..", ".......F.F....", ".......F.F...."];
 const HAWK_PAL = { D: "#4a3020", B: "#7a5030", T: "#c0562c", L: "#ead9b6", E: "#141414", Y: "#f0c020", F: "#f0c020" };
-function fineWeather() { return ts.I < 0.02 && rainK < 0.15 && cloudCover() < 0.4 && SW[3] < 0.5; }   // to come out at all
-function hawkStays() { return ts.I < 0.02; }      // once out, only the storm drives it off: it sees out a shower, a cloud, the first snow
+function fineWeather() { return dayK > 0.6 && ts.I < 0.02 && rainK < 0.15 && cloudCover() < 0.4 && SW[3] < 0.5; }   // to come out at all
+function hawkStays() { return ts.I < 0.02 && dayK > 0.2; }      // once out, only the storm drives it off: it sees out a shower, a cloud, the first snow
 const HAWK_LULL = 15;
 function hawkRoom() {                               // s of season clock before the storm comes
   const L = 4 * SEASON.len, [s0, d] = stormWindow(), f = s0 - 2;
@@ -3152,7 +3469,8 @@ function drawBoomFront() {                            // in front: the starburst
 
 function draw() {
   blendPalette();
-  sky();
+  todSky();
+  ctx.clearRect(0, 0, W, H);                     // the sky goes in last, behind it all (skyBehind)
   drawSun();
   drawBlimp();                                   // high up, behind the clouds
   clouds();
@@ -3190,6 +3508,7 @@ function draw() {
   groundShadows();
   drawStreaksSwirls();                           // in FRONT of the pipes: the pipes are solid, so
   drawDustLeaves(false);                         // nothing is ever on top of one to need hiding
+  nightVeil();                                   // dusk and dark over the world (the bird stays bright)
   if (dead && zapOn && !falling) {               // electric glow behind the bird
     ctx.fillStyle = "rgba(127,232,255,.28)";
     ctx.fillRect(birdX - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
@@ -3201,6 +3520,8 @@ function draw() {
   drawBird();
   drawScorch();
   drawHawk();
+  drawWaves();
+  drawUfo();
   drawDustLeaves(true);                          // the near leaves pass in front of the bird
   drawBolts();
   drawFeathers();
@@ -3208,7 +3529,10 @@ function draw() {
   drawStrikes(2);                                // overhead: in front of everything
   if (ts.flash > 0) { ctx.fillStyle = "rgba(240,244,255," + (0.8 * ts.flash).toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
 
+  skyBehind();
+
   outlineText(String(score), W / 2, 78, "#ffffff", F.big);
+  drawMorseHud();
   if (STAGE && stageN > 1 && stageT < 1.6 && !dead) outlineText("STAGE " + stageN, W / 2, 112, "#ffe9a0", F.hud);
   if (quake && quake.t < QUAKE.rumble + 3.5 && (airClock * 4 | 0) % 2 === 0) outlineText("EARTHQUAKE!", W / 2, 150, "#ffcf6a", F.big);
   if (quake && quake.fell && quake.t > QUAKE.rumble + 1 && quake.t < QUAKE.rumble + 5) outlineText("FREE PASS", W / 2, 180, "#ffffff", F.hud);
@@ -3238,8 +3562,8 @@ function draw() {
   if (dead && offT > 0) {
     ctx.fillStyle = "rgba(20,32,15,.92)";
     ctx.fillRect(W / 2 - 76, H / 2 - 40, 152, 80);
-    txt(struck ? "ZAPPED" : grabbed ? "SNATCHED" : "CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
-    txt(struck ? "struck by lightning" : grabbed ? "taken by a hawk" : "score " + score, W / 2, H / 2 + 8, struck ? "#cfd8ff" : grabbed ? "#ffd27a" : "#9fb0bd", F.hud, "center");
+    txt(struck ? "ZAPPED" : grabbed ? "SNATCHED" : abducted ? "ABDUCTED" : "CRASHED", W / 2, H / 2 - 12, "#ffffff", F.big, "center");
+    txt(struck ? "struck by lightning" : grabbed ? "taken by a hawk" : abducted ? "taken by aliens" : "score " + score, W / 2, H / 2 + 8, struck ? "#cfd8ff" : grabbed ? "#ffd27a" : abducted ? "#9fffb0" : "#9fb0bd", F.hud, "center");
     txt("restarting...", W / 2, H / 2 + 26, "#9fb0bd", F.hud, "center");
   }
 

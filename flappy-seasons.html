@@ -69,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r20</div>
+<div id="hud">seasons r21</div>
 
 <script>
 "use strict";
@@ -81,7 +81,9 @@
 /* TV mode (?tv): the logical world is widened to the SCREEN's shape (not the window's,
    so going fullscreen changes nothing), 512 tall as always: on a 16:9 set that is 910
    wide and the picture fills it edge to edge. The controls and the caption go away. */
-const TV = /[?&]tv(=|&|$)/.test(location.search);
+const TVS = /[?&]tvs(=|&|$)/.test(location.search);   // ?tvs: the same, scrolling as usual, the bird held in the middle
+const TV = TVS || /[?&]tv(=|&|$)/.test(location.search);
+const STAGE = TV && !TVS;                           // ?tv: still stages the bird flies across
 function tvWidth() {
   let a = 0;
   try { a = screen.width / screen.height; } catch (e) {}
@@ -103,7 +105,8 @@ const FIXED = 1/120;
 const COOLD = 0.34;         // > FLAP/GRAVITY = 0.30s, so the bird cannot hover
 
 const BIRD_X = 80;
-const STAGE_END = 70;       // TV: the bird is this far from the right edge when the next stage pops up
+const STAGE_END = 70;       // ?tv: the bird is this far from the right edge when the next stage pops up
+const TVS_FLY = 3;          // ?tvs: s for the bird to fly in from the left to the middle, where it stays
 const BW = 17, BH = 12;     // hand-authored sprite
 const BS = 2;               // sprite is drawn 2x: 34x24 on screen
 const SPR_W = BW * BS, SPR_H = BH * BS;
@@ -370,7 +373,7 @@ let falling = false, offT = 0, deathRot = 0;
 /* air state */
 let wind = { u: 0, target: 0, next: 0 }, gusts = [], currents = [], airParts = [];
 let airU = 0, gustE = 0, aBird = 0, aFelt = 0, airClock = 0;
-let homeX = BIRD_X, vrun = SPEED0, stageN = 1, stageT = 9, birdX = BIRD_X, gspd = SPEED0, dist = 0, cloudX = 0, curSince = 0, curNext = 300;
+let homeX = BIRD_X, flyT = 0, vrun = SPEED0, stageN = 1, stageT = 9, birdX = BIRD_X, gspd = SPEED0, dist = 0, cloudX = 0, curSince = 0, curNext = 300;
 const WA = { u: 0, a: 0 };                          // windAt() result, reused
 
 /* summer state: the sun, smoke and dust carry on between games, the heat does not */
@@ -418,7 +421,7 @@ function reset() {
   feathers = []; bolts = []; zapT = 0; zapOn = false; jit = [0, 0]; boom = null; shakeT = 0;
   falling = false; offT = 0; deathRot = 0;
   wind = { u: 0, target: 0, next: 0 }; gusts = []; currents = []; airParts = [];
-  airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; homeX = BIRD_X; stageN = 1; stageT = 9; curSince = 0; curNext = 300;
+  airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; homeX = BIRD_X; flyT = 0; stageN = 1; stageT = 9; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; sparks = []; heatFx();
   struck = false; grabbed = false;
   quake = null; quakeK = 0; fallen = []; cracks = []; rocks = [];
@@ -426,7 +429,7 @@ function reset() {
   firstPipes();
 }
 
-function spawn(x = W + REACH + homeX - BIRD_X) {   // as far ahead of the bird as ever (TV: the bird moves, not the world)
+function spawn(x = W + REACH + (STAGE ? homeX - BIRD_X : 0)) {   // as far ahead of the bird as ever (TV: the bird moves, not the world)
   const top = 30 + Math.random() * (SKY - 60 - gap);
   pipes.push({ x: x, top: top, bot: top + gap, passed: false,
                sf: 0.85 + Math.random() * 0.3,          // this pipe's share of the sand
@@ -435,7 +438,7 @@ function spawn(x = W + REACH + homeX - BIRD_X) {   // as far ahead of the bird a
   if (SFX.desert > 0.5) spawnCactus(x + PIPE_W / 2 + speed * spaceSec / 2);     // half way to the next pipe, in the desert season
 }
 function firstPipes() {           // a new game: the first pipe at the right edge, as always,
-  let x = TV ? 288 : W;           // and the ones behind it already out there in the glare (TV: as far from the bird as usual)
+  let x = STAGE ? 288 : W;           // and the ones behind it already out there in the glare (TV: as far from the bird as usual)
   for (; x <= W + REACH; x += speed * spaceSec) spawn(x);
   since = W + REACH - (x - speed * spaceSec);
 }
@@ -475,9 +478,10 @@ function step(dt) {
   const sc = storm > 0 ? WIND.spdCap * 2 + (STORM.spd - WIND.spdCap * 2) * storm
                        : WIND.spdCap * Math.max(1, physMul);
   vrun = speed * (1 + Math.max(-sc, Math.min(sc, airU * WIND.spdPerU)));   // the bird's speed through the world
-  gspd = TV ? 0 : vrun;            // ...which is how fast the world scrolls by, except on a TV stage, where the bird crosses it
+  gspd = STAGE ? 0 : vrun;            // ...which is how fast the world scrolls by, except on a TV stage, where the bird crosses it
   dist += gspd * dt;
-  if (TV) { homeX += vrun * dt; birdX += vrun * dt; if (homeX > W - STAGE_END) nextStage(); }   // the bird carries itself across
+  if (TVS) { flyT += dt; homeX = BIRD_X + (W / 2 - BIRD_X) * smooth(flyT / TVS_FLY); }   // out to the middle, then it holds there
+  if (STAGE) { homeX += vrun * dt; birdX += vrun * dt; if (homeX > W - STAGE_END) nextStage(); }   // the bird carries itself across
   cloudX += (14 - airU * 0.3) * dt;
 
   // pipes are spaced by DISTANCE, so wind never squeezes two gates together
@@ -1175,7 +1179,7 @@ function stepWind(dt) {
 
 function spawnCurrent() {
   const up = Math.random() < WIND.upFrac, w = randIn(WIND.curW);
-  currents.push({ x: W + w / 2 + 10 + homeX - BIRD_X, w: w, s: up ? -randIn(WIND.upS) : randIn(WIND.downS), ph: Math.random() * 97 });
+  currents.push({ x: W + w / 2 + 10 + (STAGE ? homeX - BIRD_X : 0), w: w, s: up ? -randIn(WIND.upS) : randIn(WIND.downS), ph: Math.random() * 97 });
 }
 function currentF(c, x) {                       // cosine column profile, 1 at the centre
   const d = Math.abs(x - c.x) / (c.w / 2);
@@ -3196,7 +3200,7 @@ function draw() {
   if (ts.flash > 0) { ctx.fillStyle = "rgba(240,244,255," + (0.8 * ts.flash).toFixed(3) + ")"; ctx.fillRect(0, 0, W, H); }
 
   outlineText(String(score), W / 2, 78, "#ffffff", F.big);
-  if (TV && stageN > 1 && stageT < 1.6 && !dead) outlineText("STAGE " + stageN, W / 2, 112, "#ffe9a0", F.hud);
+  if (STAGE && stageN > 1 && stageT < 1.6 && !dead) outlineText("STAGE " + stageN, W / 2, 112, "#ffe9a0", F.hud);
   if (quake && quake.t < QUAKE.rumble + 3.5 && (airClock * 4 | 0) % 2 === 0) outlineText("EARTHQUAKE!", W / 2, 150, "#ffcf6a", F.big);
   if (quake && quake.fell && quake.t > QUAKE.rumble + 1 && quake.t < QUAKE.rumble + 5) outlineText("FREE PASS", W / 2, 180, "#ffffff", F.hud);
   if (clearT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap sanded shut: the wind scours it all away

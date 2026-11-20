@@ -28,8 +28,12 @@
     display:flex;flex-direction:column;align-items:center;gap:12px;
     font:400 14px/1.5 "04b_19",ui-monospace,monospace;color:#7d8a94;letter-spacing:0}
   #stage{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center}
-  canvas{flex:none;display:block;image-rendering:pixelated;image-rendering:crisp-edges;
-    box-shadow:0 14px 44px rgba(0,0,0,.6);border-radius:3px;touch-action:none}
+  /* the scene canvas is painted at its own (capped) resolution and the browser scales it
+     up on the GPU; the scanlines are a second canvas on top, drawn once per resize */
+  #screen{flex:none;position:relative;overflow:hidden;background:#000;
+    box-shadow:0 14px 44px rgba(0,0,0,.6);border-radius:3px}
+  canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;touch-action:none}
+  #scan{position:absolute;left:0;top:0;pointer-events:none}
     /* just a revision tag: one short line, so the play area keeps the room */
   #hud{flex:none;text-align:center;text-transform:uppercase;white-space:nowrap;line-height:1;color:#4a545c}
   /* WIND control: a native range input (mouse, touch, keyboard all for free), log scale */
@@ -44,7 +48,7 @@
   /* TV (?tv): the world is as wide as the screen, nothing but the game, no pointer */
   body.tv{padding:0;gap:0;cursor:none}
   body.tv #windctl, body.tv #hud{display:none}
-  body.tv canvas{box-shadow:none;border-radius:0}
+  body.tv #screen{box-shadow:none;border-radius:0}
   #disco:focus{outline:none}
   #disco:focus-visible{outline:2px solid #7fe8ff;outline-offset:2px}
   #disco.on{color:#000;animation:disco 0.8s steps(4) infinite}
@@ -65,11 +69,11 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="game"></canvas></div>
+<div id="stage"><div id="screen"><canvas id="game"></canvas><canvas id="scan"></canvas></div></div>
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r28</div>
+<div id="hud">seasons r29</div>
 
 <script>
 "use strict";
@@ -1895,10 +1899,16 @@ const SPR_ZAP = { K: "#fffbe0", Y: "#2a2f7a", D: "#151845", C: "#3a4290", W: "#f
 
 
 /* ---------- paint ---------- */
-const cvs = document.getElementById("game");
-const vctx = cvs.getContext("2d", { alpha: false });   // what the viewer sees
-const buf = document.createElement("canvas");             // the scene is painted here
+/* The scene is painted straight into the visible canvas, at R canvas px per logical px,
+   and CSS stretches it to the screen (nearest-neighbour, on the GPU): no per-frame copy.
+   R is the largest whole multiple not above the device size that keeps the canvas under
+   BUF_MAX pixels - on a TV (or a 4K one) every full-screen layer is paid for per pixel,
+   and the art is on the logical grid anyway. ?lowres forces R = 1. ?fps shows timings. */
+const cvs = document.getElementById("game"), scan = document.getElementById("scan");
+const buf = cvs;
 const ctx = buf.getContext("2d");               // with alpha: the sky is painted in behind it all, last
+const BUF_MAX = 2.1e6, LOWRES = /[?&]lowres(=|&|$)/.test(location.search), SHOWFPS = /[?&]fps(=|&|$)/.test(location.search);
+let DPR = 1;
 const stage = document.getElementById("stage");
 let R = 2, DS = 2;   // R = buffer pixels per logical px (integer), DS = device px per logical px
 
@@ -1937,19 +1947,22 @@ function fit() {
   DS = Math.min(box.width / W, box.height / H) * dpr;
   const devW = Math.max(1, Math.floor(W * DS)), devH = Math.max(1, Math.floor(H * DS));
   DS = Math.min(devW / W, devH / H);
-  if (cvs.width !== devW || cvs.height !== devH) {
-    // display canvas = exact device pixels, so the scanlines land on real rows
-    cvs.width = devW; cvs.height = devH;
-    cvs.style.width = (devW / dpr) + "px";
-    cvs.style.height = (devH / dpr) + "px";
+  DPR = dpr;
+  for (const c of [cvs, scan]) { c.style.width = (devW / dpr) + "px"; c.style.height = (devH / dpr) + "px"; }
+  if (scan.width !== devW || scan.height !== devH) {
+    // scanlines = exact device pixels at an integer period (~1.5 logical px), drawn once
+    scan.width = devW; scan.height = devH;
+    const sc = scan.getContext("2d"), O = Math.max(3, Math.round(1.5 * DS));
+    sc.fillStyle = "rgba(0,0,0,.15)";
+    for (let y = 0; y < devH; y += O) sc.fillRect(0, y, devW, 1);
   }
-  // scene buffer = largest whole multiple of the grid not above the device size;
-  // it is then stretched (nearest-neighbour) by a factor in [1, 2)
-  const r = Math.max(1, Math.floor(DS));
-  if (r !== R || buf.width !== W * r) { R = r; buf.width = W * R; buf.height = H * R; }
+  // scene = largest whole multiple of the grid not above the device size (and not
+  // above BUF_MAX pixels); the browser stretches it (nearest-neighbour) to the screen
+  let r = LOWRES ? 1 : Math.max(1, Math.floor(DS));
+  while (r > 1 && W * H * r * r > BUF_MAX) r--;
+  if (r !== R || buf.width !== W * r || buf.height !== H * r) { R = r; buf.width = W * R; buf.height = H * R; }
   ctx.setTransform(R, 0, 0, R, 0, 0);
   ctx.imageSmoothingEnabled = false;
-  vctx.imageSmoothingEnabled = false;
 }
 fit();
 addEventListener("resize", fit);
@@ -3656,18 +3669,19 @@ function draw() {
     drawStats();
   }
 
-  /* blit the scene to the display canvas, then draw scanlines in DEVICE
-     pixels at an integer period (~1.5 logical px) so the spacing is exact. */
+  if (SHOWFPS) perfLine.forEach((l, i) => txt(l, W - 8, H - 26 + 18 * i, "#ffffff", F.hud, "right"));
+
+  /* a crash or a quake shakes the whole screen (a quake mostly side to side): the canvas
+     itself is moved, in whole device px, over the black behind it; the scanlines stay put */
   const qa = quakeShake(), ba = shakeT > 0 ? BOOM.shake * (shakeT / BOOM.shakeT) ** 1.5 : 0;
-  if (qa > 0 || ba > 0) {                        // a crash or a quake shakes the whole screen (a quake mostly side to side)
+  let sh = "";
+  if (qa > 0 || ba > 0) {
     const a = Math.max(qa, ba) * DS, vy = ba >= qa ? 1 : 0.45;
-    vctx.fillStyle = "#000"; vctx.fillRect(0, 0, cvs.width, cvs.height);
-    vctx.drawImage(buf, Math.round((Math.random() * 2 - 1) * a), Math.round((Math.random() * 2 - 1) * a * vy), cvs.width, cvs.height);
-  } else vctx.drawImage(buf, 0, 0, cvs.width, cvs.height);
-  const O = Math.max(3, Math.round(1.5 * DS));
-  vctx.fillStyle = "rgba(0,0,0,.15)";
-  for (let y = 0; y < cvs.height; y += O) vctx.fillRect(0, y, cvs.width, 1);
+    sh = "translate(" + Math.round((Math.random() * 2 - 1) * a) / DPR + "px," + Math.round((Math.random() * 2 - 1) * a * vy) / DPR + "px)";
+  }
+  if (sh !== shakeCss) { cvs.style.transform = sh; shakeCss = sh; }
 }
+let shakeCss = "";
 
 /* ---------- ENV slider: log scale OFF, x0.1 .. x20 (x20 = extreme) ----------
    Slider 0..1000. The far-left notch is OFF (no wind, no heat, no ice); the rest
@@ -3738,11 +3752,24 @@ windIn.addEventListener("keydown", e => {         // 1000 fine steps are for dra
 });
 reset();
 let acc = 0, last = performance.now();
+/* At most 0.1 s of catch-up per frame: a device that falls behind plays a little slow
+   instead of spiralling (each slow frame queueing more steps, which make the next one slower). */
+let perfLine = [], pf = { n: 0, t0: 0, st: 0, dr: 0, worst: 0 };
 function loop(now) {
-  acc = Math.min(0.25, acc + (now - last) / 1000);
+  const gap = now - last;
+  acc = Math.min(0.1, acc + gap / 1000);
   last = now;
+  const t0 = SHOWFPS ? performance.now() : 0;
   while (acc >= FIXED) { step(FIXED); acc -= FIXED; }
+  const t1 = SHOWFPS ? performance.now() : 0;
   draw();
+  if (SHOWFPS) {                                   // ?fps: frames a second, ms per frame in the sim and the paint, the worst gap
+    pf.n++; pf.st += t1 - t0; pf.dr += performance.now() - t1; pf.worst = Math.max(pf.worst, gap);
+    if (now - pf.t0 >= 1000) {
+      perfLine = [pf.n + " FPS  MAX " + Math.round(pf.worst) + "MS", "SIM " + (pf.st / pf.n).toFixed(1) + " DRAW " + (pf.dr / pf.n).toFixed(1) + " " + buf.width + "X" + buf.height];
+      pf = { n: 0, t0: now, st: 0, dr: 0, worst: 0 };
+    }
+  }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

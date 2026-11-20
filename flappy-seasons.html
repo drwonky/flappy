@@ -69,7 +69,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r26</div>
+<div id="hud">seasons r27</div>
 
 <script>
 "use strict";
@@ -744,7 +744,7 @@ function reset() {
   dish = abducted ? makeDish() : null; waves = [];   // they left something in it
   struck = false; grabbed = false; abducted = false;
   quake = null; quakeK = 0; fallen = []; cracks = []; rocks = [];
-  ramp(0); gspd = speed;
+  ramp(0); gspd = speed; statsT = STATS_SHOW;
   firstPipes();
 }
 
@@ -781,6 +781,7 @@ function step(dt) {
   stepSeason(dt);                  // the seasons turn through the crash too
   stepClock(dt); stepShooting(dt); // and the days
   stepDish(dt);
+  if (!dead) statsT = Math.max(0, statsT - dt);
   setWindMul(envWind() * windX * SFX.wind);
   if (windMul > 0) stepWind(dt);   // the wind keeps blowing through the crash
   stepSun(dt);                     // the sun, the smoke and the dust go on through the crash
@@ -914,6 +915,7 @@ function birdRot() { return bird.vy < -60 ? -0.26 : Math.min(0.80, bird.vy / 620
 
 function die(ix, iy, kind) {
   dead = true; deadT = 0; flash = 1;
+  recordRun(struck ? "zap" : grabbed ? "hawk" : abducted ? "ufo" : kind === "ground" && iy < SKY / 2 ? "ceiling" : kind || "pipe");
   if (!struck && !grabbed && !abducted) startBoom(ix === undefined ? birdX : ix, iy === undefined ? bird.y : iy, kind || "pipe");
   deathRot = birdRot();
   bird.vy = 0;
@@ -925,6 +927,69 @@ function die(ix, iy, kind) {
       vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120, rot: Math.random() * 3, vr: (Math.random() * 2 - 1) * 14,
       ph: Math.random() * 6, fr: 6, len: 2 + (Math.random() * 3 | 0), col: Math.random() < 0.5 ? "#c9f0ff" : "#ffffff" });
   }
+}
+
+/* ---------- STATS - kept in the browser across visits: how many runs, how each
+   one ended, the average score at each ENV setting (bracketed like the slider's
+   labels: off, low, the x1 default, up to x2, harsh, extreme) and the best ever.
+   Shown for a few seconds at the start of every run. ?resetstats clears them. */
+const STATS_KEY = "flappy-stats", STATS_SHOW = 5;
+const DEATHS = [["pipe", "PIPE"], ["ground", "GROUND"], ["ceiling", "CEILING"], ["zap", "LIGHTNING"], ["hawk", "HAWK"], ["ufo", "ALIENS"]];
+const ENV_BR = [["OFF", v => v <= 0], ["x0.1-1", v => v < 1], ["x1", v => v === 1], ["x1-2", v => v <= 2], ["x2-20", v => v < 20], ["x20", () => true]];
+function freshStats() { const d = {}; for (const [k] of DEATHS) d[k] = 0; return { runs: 0, max: 0, d, e: ENV_BR.map(() => [0, 0, 0]) }; }
+const stats = (() => {
+  const s = freshStats();
+  if (qflag("resetstats")) { try { localStorage.removeItem(STATS_KEY); } catch (e) {} return s; }
+  try {
+    const o = JSON.parse(localStorage.getItem(STATS_KEY));
+    if (o) {
+      s.runs = +o.runs || 0; s.max = +o.max || 0;
+      for (const [k] of DEATHS) s.d[k] = o.d && +o.d[k] || 0;
+      if (Array.isArray(o.e)) s.e.forEach((r, i) => { const q = o.e[i]; if (Array.isArray(q)) for (let j = 0; j < 3; j++) r[j] = +q[j] || 0; });
+    }
+  } catch (e) {}
+  return s;
+})();
+let statsT = STATS_SHOW;
+function recordRun(kind) {                          // one run over: how it ended, and at what ENV
+  stats.runs++;
+  stats.d[kind] = (stats.d[kind] || 0) + 1;
+  stats.max = Math.max(stats.max, score);
+  const r = stats.e[ENV_BR.findIndex(b => b[1](sunMul))];
+  r[0] += score; r[1]++; r[2] = Math.max(r[2], score);
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(stats)); } catch (e) {}
+}
+function drawStats() {                              // the card at the start of a run
+  if (statsT <= 0 || dead) return;
+  const a = Math.min(1, statsT / 0.7, (STATS_SHOW - statsT) / 0.25);
+  const pw = 248, x0 = Math.round(W / 2 - pw / 2), y0 = dish ? 150 : 128, L = 17;   // below the morse ticker
+  ctx.globalAlpha = a;
+  ctx.fillStyle = "rgba(14,20,36,.72)"; ctx.fillRect(x0, y0, pw, 14 * L + 14);
+  ctx.fillStyle = "rgba(255,255,255,.25)"; ctx.fillRect(x0, y0, pw, 1); ctx.fillRect(x0, y0 + 14 * L + 13, pw, 1);
+  const W1 = "#ffffff", DIM = "#9fb0bd", HD = "#ffe9a0";
+  let y = y0 + 18;
+  txt("RUNS " + stats.runs, x0 + 8, y, W1, F.hud, "left");
+  txt("MAX SCORE " + stats.max, x0 + pw - 8, y, "#ffd27a", F.hud, "right");
+  y += L + 6; txt("DEATHS", x0 + 8, y, HD, F.hud, "left");
+  for (let i = 0; i < DEATHS.length; i++) {
+    const [k, n] = DEATHS[i], c = i % 2, xl = x0 + 8 + c * 122, xr = x0 + 116 + c * 124;
+    if (c === 0) y += L;
+    txt(n, xl, y, DIM, F.hud, "left");
+    txt(String(stats.d[k]), xr, y, W1, F.hud, "right");
+  }
+  y += L + 6;
+  const cx = [x0 + 8, x0 + 148, x0 + 196, x0 + pw - 8];
+  txt("ENV", cx[0], y, HD, F.hud, "left");
+  txt("AVG", cx[1], y, HD, F.hud, "right"); txt("RUNS", cx[2], y, HD, F.hud, "right"); txt("MAX", cx[3], y, HD, F.hud, "right");
+  ENV_BR.forEach(([n], i) => {
+    const [sum, cnt, mx] = stats.e[i], on = ENV_BR.findIndex(b => b[1](sunMul)) === i;
+    y += L;
+    txt(n, cx[0], y, on ? "#9fffb0" : DIM, F.hud, "left");
+    txt(cnt ? (sum / cnt).toFixed(1) : "-", cx[1], y, cnt ? W1 : DIM, F.hud, "right");
+    txt(String(cnt), cx[2], y, cnt ? W1 : DIM, F.hud, "right");
+    txt(cnt ? String(mx) : "-", cx[3], y, cnt ? W1 : DIM, F.hud, "right");
+  });
+  ctx.globalAlpha = 1;
 }
 
 const FEATHER_COLS = [C.birdY, C.birdY, C.birdD, C.birdC, "#ffffff"];
@@ -3554,6 +3619,7 @@ function draw() {
   skyBehind();
 
   outlineText(String(score), W / 2, 78, "#ffffff", F.big);
+  drawStats();
   drawMorseHud();
   if (STAGE && stageN > 1 && stageT < 1.6 && !dead) outlineText("STAGE " + stageN, W / 2, 112, "#ffe9a0", F.hud);
   if (quake && quake.t < QUAKE.rumble + 3.5 && (airClock * 4 | 0) % 2 === 0) outlineText("EARTHQUAKE!", W / 2, 150, "#ffcf6a", F.big);

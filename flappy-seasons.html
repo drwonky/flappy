@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r31</div>
+<div id="hud">seasons r32</div>
 
 <script>
 "use strict";
@@ -3669,6 +3669,7 @@ function draw() {
     drawStats();
   }
 
+  if (PROF) profLines.forEach((l, i) => outlineText(l, W / 2, 150 + 18 * i, "#ffffff", F.hud));
   if (SHOWFPS) perfLine.forEach((l, i) => txt(l, W - 8, H - 26 + 18 * i, "#ffffff", F.hud, "right"));
 
   /* a crash or a quake shakes the whole screen (a quake mostly side to side): the canvas
@@ -3766,6 +3767,27 @@ let last = performance.now(), vsync = 1 / 60;
 const HZCAP = qnum("hz") > 0 ? qnum("hz") : 0;
 let every = 1, pace = { t0: 0, n: 0, miss: 0 };
 let perfLine = [], pf = { n: 0, t0: 0, st: 0, dr: 0, worst: 0, steps: 0, d2: 0, dd: 0 };
+/* ?prof: the parts of the game that draw() and step() call, timed on the device itself;
+   the six dearest are listed on screen in ms per frame (nested calls count in both). */
+const PROF = qflag("prof"), profT = {};
+let profLines = [], profF = 0, profT0 = 0;
+if (PROF) {
+  const skip = new Set(["windAt", "currentF", "px", "txt", "outlineText", "smooth", "randIn", "ramp", "draw", "step", "visU", "pipeFlow", "keepOut"]);
+  const names = new Set();
+  for (const f of [draw, step, stepFlair, stepDeath]) for (const m of f.toString().matchAll(/\b([a-z]\w*)\(/g)) names.add(m[1]);
+  for (const k of names) {
+    if (skip.has(k) || typeof window[k] !== "function") continue;
+    const f = window[k];
+    window[k] = function () { const t = performance.now(), r = f.apply(this, arguments); profT[k] = (profT[k] || 0) + performance.now() - t; return r; };
+  }
+}
+function profTick(now) {
+  profF++;
+  if (now - profT0 < 2000) return;
+  profLines = Object.entries(profT).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => k.toUpperCase() + " " + (v / profF).toFixed(1));
+  for (const k in profT) profT[k] = 0;
+  profF = 0; profT0 = now;
+}
 let lastRaw = last;
 function loop(now) {
   const raw = Math.max(0, now - lastRaw) / 1000, rr = raw / vsync;   // the display's refresh, learned from every callback
@@ -3791,6 +3813,7 @@ function loop(now) {
   if (gap > 0) for (let i = 0; i < n; i++) step(h);
   const t1 = SHOWFPS ? performance.now() : 0;
   draw();
+  if (PROF) profTick(now);
   if (SHOWFPS) {                                   // ?fps: frames a second, the display rate, ms per frame in the sim and the paint, the worst gap, the jitter
     pf.n++; pf.st += t1 - t0; pf.dr += performance.now() - t1; pf.worst = Math.max(pf.worst, gap * 1000); pf.steps += n;
     pf.d2 += (gap - k * vsync) ** 2;   // off the refreshes it spans

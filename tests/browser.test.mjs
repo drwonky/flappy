@@ -35,6 +35,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     ["?env=0", PHONE], ["?env=20", PHONE], ["?fps&prof", PHONE], ["?lowres", TVSIZE], ["?hz=30", PHONE],
     ["?daylen=30&hour=17", PHONE], ["?season=3&snow=200&hour=23", PHONE], ["?season=1&sand=200", PHONE],
     ["?resetstats", PHONE], ["?tvs&tod&fps", TVSIZE],
+    ["?2d", PHONE], ["?2d", DESKTOP], ["?scan=soft", TVSIZE], ["?scan=grille", TVSIZE], ["?scan=off", TVSIZE], ["?2d&scan=off", PHONE],
   ];
   for (const [search, view] of VARIANTS) {
     it(`loads and runs: ${search || "(no options)"} at ${view.width}x${view.height}`, async () => {
@@ -51,14 +52,65 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     } finally { await tv.close(); await ph.close(); }
   });
 
-  it("keeps the canvas under BUF_MAX pixels even on a 4K screen", async () => {
-    const p = await open("?tvs", { width: 1920, height: 1080, dpr: 2 });
+  for (const mode of ["", "&2d"]) {
+    it(`keeps the canvas under BUF_MAX pixels even on a 4K screen${mode ? " (2D)" : ""}`, async () => {
+      const p = await open("?tvs" + mode, { width: 1920, height: 1080, dpr: 2 });
+      try {
+        const b = await p.ev("[buf.width, buf.height, BUF_MAX, R]");
+        assert.ok(b[0] * b[1] <= b[2], `canvas ${b[0]}x${b[1]}`);
+        assert.equal(b[3], 2);
+        await healthy(p, "4K" + mode);
+      } finally { await p.close(); }
+    });
+  }
+
+  // the visible canvas is a GL one (anything but #game) in GL mode
+  const shown = `(() => {
+    const vis = e => e && getComputedStyle(e).display !== "none";
+    const gl = GLR && GLR.gl.canvas;
+    return { game: vis(document.getElementById("game")), scan: vis(document.getElementById("scan")),
+      gl: !!gl && vis(gl), glw: gl ? gl.width : 0, glh: gl ? gl.height : 0 };
+  })()`;
+
+  it("uses WebGL by default and Canvas 2D with ?2d", async () => {
+    const a = await open("", DESKTOP), b = await open("?2d", DESKTOP);
     try {
-      const b = await p.ev("[buf.width, buf.height, BUF_MAX, R]");
-      assert.ok(b[0] * b[1] <= b[2], `canvas ${b[0]}x${b[1]}`);
-      assert.equal(b[3], 2);
-      await healthy(p, "4K");
+      assert.equal(await a.ev("RENDERER"), "GL", "WebGL did not start by default");
+      assert.equal(await b.ev("RENDERER"), "2D");
+      assert.equal(await b.ev("GLR"), null);
+    } finally { await a.close(); await b.close(); }
+  });
+
+  it("shows the GL canvas and hides #game and #scan in GL mode; #game in 2D", async () => {
+    const a = await open("", DESKTOP), b = await open("?2d", DESKTOP);
+    try {
+      assert.equal(await a.ev("RENDERER"), "GL");
+      const g = await a.ev(shown);
+      assert.ok(g.gl && g.glw > 0 && g.glh > 0, `no visible GL canvas: ${JSON.stringify(g)}`);
+      assert.ok(!g.game && !g.scan, `#game / #scan still shown in GL mode: ${JSON.stringify(g)}`);
+      const d = await b.ev(shown);
+      assert.ok(d.game && !d.gl, `2D mode: ${JSON.stringify(d)}`);
+    } finally { await a.close(); await b.close(); }
+  });
+
+  it("falls back to 2D when the WebGL context is lost, and keeps running", async () => {
+    const p = await open("", DESKTOP);
+    try {
+      assert.equal(await p.ev("RENDERER"), "GL");
+      assert.equal(await p.ev(`(() => { const e = GLR.gl.getExtension("WEBGL_lose_context"); if (!e) return false; e.loseContext(); return true; })()`), true, "no WEBGL_lose_context");
+      await p.sleep(1000);
+      assert.equal(await p.ev("RENDERER"), "2D");
+      assert.equal(await p.ev("GLR"), null);
+      assert.ok((await p.ev(shown)).game, "#game is not shown after the fallback");
+      await healthy(p, "after context loss");
     } finally { await p.close(); }
+  });
+
+  it("takes the scanline style from ?scan=", async () => {
+    for (const [q, want] of [["", "lines"], ["?scan=soft", "soft"], ["?scan=grille", "grille"], ["?scan=off", "off"]]) {
+      const p = await open(q, DESKTOP, 500);
+      try { assert.equal(await p.ev("SCAN_STYLE"), want, q || "default"); } finally { await p.close(); }
+    }
   });
 
   it("crashes, shows the stats card, counts the run and starts again", async () => {
@@ -145,7 +197,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     try {
       const [fps, prof] = await p.ev("[perfLine, profLines]");
       assert.match(fps[0], /^\d+ FPS \d+HZ/);
-      assert.match(fps[1], /^SIM [\d.]+ DRAW [\d.]+ \d+X\d+$/);
+      assert.match(fps[1], /^SIM [\d.]+ DRAW [\d.]+ \d+X\d+ (GL|2D)$/);
       assert.ok(prof.length >= 3, "no profiler lines");
     } finally { await p.close(); }
   });

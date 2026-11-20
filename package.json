@@ -9,6 +9,7 @@
     "test:browser": "node --test --test-reporter=spec tests/browser.test.mjs",
     "test:snapshots": "node --test --test-reporter=spec tests/snapshot.test.mjs",
     "test:balance": "node --test --test-reporter=spec \"tests/balance/*.test.mjs\"",
+    "bench": "node tests/bench.mjs",
     "test:update": "UPDATE_SNAPSHOTS=1 node --test --test-reporter=spec tests/snapshot.test.mjs"
   }
 }

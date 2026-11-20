@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r34</div>
+<div id="hud">seasons r35</div>
 
 <script>
 "use strict";
@@ -1907,14 +1907,505 @@ const SPR_ZAP = { K: "#fffbe0", Y: "#2a2f7a", D: "#151845", C: "#3a4290", W: "#f
 
 
 /* ---------- paint ---------- */
-/* The scene is painted straight into the visible canvas, at R canvas px per logical px,
-   and CSS stretches it to the screen (nearest-neighbour, on the GPU): no per-frame copy.
-   R is the largest whole multiple not above the device size that keeps the canvas under
-   BUF_MAX pixels - on a TV (or a 4K one) every full-screen layer is paid for per pixel,
-   and the art is on the logical grid anyway. ?lowres forces R = 1. ?fps shows timings. */
+/* The scene is painted at R buffer px per logical px, and stretched to the screen
+   (nearest-neighbour, on the GPU). R is the largest whole multiple not above the device
+   size that keeps the buffer under BUF_MAX pixels - on a TV (or a 4K one) every full-screen
+   layer is paid for per pixel, and the art is on the logical grid anyway. ?lowres forces
+   R = 1. ?fps shows timings.
+   With WebGL (the default) ctx is GLCtx below: the same calls as a 2D canvas, batched into
+   one vertex buffer and drawn into an offscreen framebuffer, then a last shader pass puts
+   it on screen with the scanlines (?scan=lines|soft|grille|off). Without WebGL, with ?2d,
+   or if the GL context is lost, the scene is painted straight into the visible canvas and
+   the scanlines are a canvas over it. */
 const cvs = document.getElementById("game"), scan = document.getElementById("scan");
-const buf = cvs;
-const ctx = buf.getContext("2d");               // with alpha: the sky is painted in behind it all, last
+const SCAN_STYLE = (/[?&]scan=(lines|soft|grille|off)(&|$)/.exec(location.search) || [0, "lines"])[1];
+const FORCE2D = /[?&]2d(=|&|$)/.test(location.search);
+
+/* GLCtx: the slice of CanvasRenderingContext2D the game uses, drawn with WebGL. Every rect, text
+   run and pixel row of the scene becomes a textured quad in ONE vertex buffer (solid colour = a
+   white texel of the atlas, text = whole strings rasterised once into the same atlas), so a frame
+   is a handful of draw calls instead of thousands of canvas calls. Paths that aren't plain rects
+   (the POW star, the rainbow) and clips go through the stencil buffer: bit 7 = inside the clip,
+   the low bits count winding for a fill. A last pass stretches the scene to the screen and
+   draws the scanlines. All of it is premultiplied alpha, like the canvas. */
+function makeGL(gl, cv) {
+  const MAXQ = 16383, WHITE = 4, PAD = 3;
+  const SRC = {
+    vm: "attribute vec2 a_pos;attribute vec2 a_uv;attribute vec4 a_col;uniform vec2 u_inv;varying vec2 v_uv;varying vec4 v_col;" +
+        "void main(){gl_Position=vec4(a_pos.x*u_inv.x-1.,1.-a_pos.y*u_inv.y,0.,1.);v_uv=a_uv;v_col=a_col;}",
+    fm: "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\nuniform sampler2D u_atlas;varying vec2 v_uv;varying vec4 v_col;" +
+        "void main(){gl_FragColor=v_col*texture2D(u_atlas,v_uv);}",
+    vp: "attribute vec2 a_pos;uniform vec2 u_inv;varying vec2 v_pos;" +
+        "void main(){gl_Position=vec4(a_pos.x*u_inv.x-1.,1.-a_pos.y*u_inv.y,0.,1.);v_pos=a_pos;}",
+    fs: "precision mediump float;void main(){gl_FragColor=vec4(0.);}",
+    fg: "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+        "uniform vec2 u_c;uniform vec2 u_r;uniform float u_a;uniform sampler2D u_ramp;varying vec2 v_pos;" +
+        "void main(){float t=clamp((distance(v_pos,u_c)-u_r.x)/(u_r.y-u_r.x),0.,1.);gl_FragColor=texture2D(u_ramp,vec2(t,.5))*u_a;}",
+    vq: "attribute vec2 a_pos;void main(){gl_Position=vec4(a_pos,0.,1.);}",
+    fq: "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+        "uniform sampler2D u_scene;uniform vec2 u_out;uniform vec2 u_shake;uniform int u_mode;uniform float u_O;" +
+        "void main(){" +
+        "vec2 f=gl_FragCoord.xy;float yt=u_out.y-f.y;vec2 s=vec2(f.x-u_shake.x,yt-u_shake.y);vec3 c=vec3(0.);" +
+        "if(s.x>=0.&&s.y>=0.&&s.x<u_out.x&&s.y<u_out.y)c=texture2D(u_scene,vec2(s.x/u_out.x,1.-s.y/u_out.y)).rgb;" +
+        "float row=floor(yt);" +
+        "if(u_mode==1){if(mod(row,u_O)<.5)c*=.85;}" +
+        "else if(u_mode==2){c*=1.-.12*(.5+.5*cos(6.2831853*(yt-.5)/u_O));}" +
+        "else if(u_mode==3){if(mod(row,u_O)<.5)c*=.85;float k=mod(floor(f.x),3.);vec3 m=vec3(k<.5?1.:.9,k>.5&&k<1.5?1.:.9,k>1.5?1.:.9);c*=m;}" +
+        "gl_FragColor=vec4(c,1.);}"
+  };
+  const prog = (v, f, attrs) => {
+    const p = gl.createProgram();
+    for (const [t, s] of [[gl.VERTEX_SHADER, v], [gl.FRAGMENT_SHADER, f]]) {
+      const h = gl.createShader(t); gl.shaderSource(h, s); gl.compileShader(h);
+      if (!gl.getShaderParameter(h, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(h));
+      gl.attachShader(p, h);
+    }
+    attrs.forEach((n, i) => gl.bindAttribLocation(p, i, n));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    const u = {};
+    for (const n of ["u_inv", "u_atlas", "u_c", "u_r", "u_a", "u_ramp", "u_scene", "u_out", "u_shake", "u_mode", "u_O"]) u[n] = gl.getUniformLocation(p, n);
+    return { p, u };
+  };
+  const PM = prog(SRC.vm, SRC.fm, ["a_pos", "a_uv", "a_col"]), PS = prog(SRC.vp, SRC.fs, ["a_pos"]);
+  const PG = prog(SRC.vp, SRC.fg, ["a_pos"]), PQ = prog(SRC.vq, SRC.fq, ["a_pos"]);
+
+  /* buffers: the quad batch (20 bytes a vertex: x y u v, premultiplied rgba), its static index
+     list, a scratch one for stencil triangles, and the full-screen triangle */
+  let qcap = 1024, ab = new ArrayBuffer(qcap * 80), f32 = new Float32Array(ab), u32 = new Uint32Array(ab), nq = 0;
+  const vbo = gl.createBuffer(), ibo = gl.createBuffer(), tbo = gl.createBuffer(), fbo_tri = gl.createBuffer();
+  const idx = new Uint16Array(MAXQ * 6);
+  for (let i = 0, v = 0; i < MAXQ; i++, v += 4) idx.set([v, v + 1, v + 2, v, v + 2, v + 3], i * 6);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, fbo_tri); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  let tri = new Float32Array(1024);
+  let attrMode = -1;                                // which attribute arrays are on: 0 = pos only, 1 = pos+uv+col
+  const bindMain = () => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    if (attrMode !== 1) { gl.enableVertexAttribArray(0); gl.enableVertexAttribArray(1); gl.enableVertexAttribArray(2); attrMode = 1; }
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 20, 0); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 20, 8);
+    gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, 20, 16);
+  };
+  const bindPos = b => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    if (attrMode !== 0) { gl.disableVertexAttribArray(1); gl.disableVertexAttribArray(2); attrMode = 0; }
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 8, 0);
+  };
+
+  /* the atlas: a 2D canvas that text is drawn on in white, mirrored into a texture (only the
+     part that changed is re-uploaded); texel (0,0) is solid white, for the rects */
+  const AS = Math.min(2048, gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  const ac = document.createElement("canvas"); ac.width = ac.height = AS;
+  const ax = ac.getContext("2d", { willReadFrequently: true });
+  const tex = (min) => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, min);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+  const atlas = tex(gl.NEAREST);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, AS, AS, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, WHITE, WHITE, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(WHITE * WHITE * 4).fill(255));
+  const WU = 0.5 / AS;
+  const tmap = new Map();
+  let sx = 0, sy = WHITE, sh = 0, dx0 = 0, dy0 = 0, dx1 = 0, dy1 = 0, afont = "";
+  const atlasReset = () => { tmap.clear(); sx = 0; sy = WHITE; sh = 0; ax.setTransform(1, 0, 0, 1, 0, 0); ax.clearRect(0, 0, AS, AS); afont = ""; };
+  atlasReset();
+  const upAtlas = () => {
+    if (dx1 <= dx0) return;
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, atlas);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, dx0, dy0, gl.RGBA, gl.UNSIGNED_BYTE, ax.getImageData(dx0, dy0, dx1 - dx0, dy1 - dy0));
+    dx0 = dy0 = dx1 = dy1 = 0;
+  };
+  let gR = 1;                                       // scene px per logical px (glyphs are rasterised at this scale)
+  function glyphs(font, s) {
+    const key = font + "|" + s;
+    let e = tmap.get(key);
+    if (e) return e;
+    if (afont !== font) { ax.font = font; ax.textAlign = "left"; ax.textBaseline = "alphabetic"; afont = font; }
+    const m = ax.measureText(s), size = parseFloat(font) || 14;
+    const asc = Math.ceil(m.fontBoundingBoxAscent != null ? m.fontBoundingBoxAscent : size), desc = Math.ceil(m.fontBoundingBoxDescent != null ? m.fontBoundingBoxDescent : size * 0.35);
+    const cw = Math.ceil((m.width + 2 * PAD) * gR), ch = (asc + desc + 2 * PAD) * gR;
+    if (sx + cw > AS) { sy += sh; sx = 0; sh = 0; }
+    if (sy + ch > AS) { flush(); atlasReset(); ax.font = font; afont = font; ax.textAlign = "left"; ax.textBaseline = "alphabetic"; }
+    ax.setTransform(gR, 0, 0, gR, sx + PAD * gR, sy + (PAD + asc) * gR);
+    ax.fillStyle = "#fff"; ax.fillText(s, 0, 0);
+    ax.setTransform(1, 0, 0, 1, 0, 0);
+    if (dx1 <= dx0) { dx0 = sx; dy0 = sy; dx1 = sx + cw; dy1 = sy + ch; }
+    else { dx0 = Math.min(dx0, sx); dy0 = Math.min(dy0, sy); dx1 = Math.max(dx1, sx + cw); dy1 = Math.max(dy1, sy + ch); }
+    e = { x: sx, y: sy, w: cw, h: ch, adv: m.width, asc };
+    sx += cw; if (ch > sh) sh = ch;
+    tmap.set(key, e);
+    return e;
+  }
+
+  /* the scene: an offscreen RGBA texture + depth/stencil, bw x bh scene pixels */
+  const sceneTex = tex(gl.NEAREST), sceneRb = gl.createRenderbuffer(), fb = gl.createFramebuffer();
+  let bw = 1, bh = 1, cw_ = 1, ch_ = 1, kdev = 1, scanO = 3, scanMode = 1;
+  const buf = { width: 1, height: 1, toDataURL(type) {
+    flush();
+    const px = new Uint8Array(bw * bh * 4), out = new Uint8ClampedArray(bw * bh * 4);
+    const prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.readPixels(0, 0, bw, bh, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prev);
+    for (let y = 0; y < bh; y++) out.set(px.subarray((bh - 1 - y) * bw * 4, (bh - y) * bw * 4), y * bw * 4);
+    const c = document.createElement("canvas"); c.width = bw; c.height = bh;
+    c.getContext("2d").putImageData(new ImageData(out, bw, bh), 0, 0);
+    return c.toDataURL(type);
+  } };
+  function resizeScene(w, h, r) {
+    flush();
+    if (r !== gR) { gR = r; atlasReset(); }
+    bw = buf.width = w; bh = buf.height = h;
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, sceneRb); gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_STENCIL, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, sceneRb);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0); gl.colorMask(true, true, true, true); gl.stencilMask(0xFF); gl.disable(gl.SCISSOR_TEST);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    clipOn = false;
+  }
+
+  /* ---- batching ---- */
+  let clipOn = false, cover = false, blendOp = "source-over";
+  const setBlend = () => {
+    if (blendOp === "source-atop") gl.blendFunc(gl.DST_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    else if (blendOp === "destination-over") gl.blendFunc(gl.ONE_MINUS_DST_ALPHA, gl.ONE);
+    else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  };
+  const setTest = () => {                           // what the colour passes test against the stencil
+    gl.stencilMask(0xFF);
+    if (cover) { gl.enable(gl.STENCIL_TEST); gl.stencilFunc(gl.NOTEQUAL, 0, 0x7F); gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO); gl.stencilMask(0x7F); }
+    else if (clipOn) { gl.enable(gl.STENCIL_TEST); gl.stencilFunc(gl.EQUAL, 0x80, 0x80); gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); }
+    else gl.disable(gl.STENCIL_TEST);
+  };
+  function flush() {
+    if (!nq) return;
+    upAtlas();
+    gl.useProgram(PM.p); gl.uniform2f(PM.u.u_inv, 2 / bw, 2 / bh); gl.uniform1i(PM.u.u_atlas, 0);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, atlas);
+    bindMain();
+    gl.bufferData(gl.ARRAY_BUFFER, f32.subarray(0, nq * 20), gl.DYNAMIC_DRAW);
+    setBlend(); setTest();
+    gl.drawElements(gl.TRIANGLES, nq * 6, gl.UNSIGNED_SHORT, 0);
+    gl.stencilMask(0xFF);
+    nq = 0;
+  }
+  function room() { if (nq === MAXQ) flush(); else if (nq === qcap) { qcap *= 2; const nb = new ArrayBuffer(qcap * 80); new Uint8Array(nb).set(new Uint8Array(ab)); ab = nb; f32 = new Float32Array(ab); u32 = new Uint32Array(ab); } }
+  function quad(x0, y0, x1, y1, u0, v0, u1, v1, col) {   // an axis-aligned quad in scene px
+    room();
+    let i = nq++ * 20;
+    f32[i] = x0; f32[i + 1] = y0; f32[i + 2] = u0; f32[i + 3] = v0; u32[i + 4] = col;
+    f32[i + 5] = x1; f32[i + 6] = y0; f32[i + 7] = u1; f32[i + 8] = v0; u32[i + 9] = col;
+    f32[i + 10] = x1; f32[i + 11] = y1; f32[i + 12] = u1; f32[i + 13] = v1; u32[i + 14] = col;
+    f32[i + 15] = x0; f32[i + 16] = y1; f32[i + 17] = u0; f32[i + 18] = v1; u32[i + 19] = col;
+  }
+  function quad4(x0, y0, x1, y1, x2, y2, x3, y3, u0, v0, u1, v1, col) {   // any parallelogram (the rotated case)
+    room();
+    let i = nq++ * 20;
+    f32[i] = x0; f32[i + 1] = y0; f32[i + 2] = u0; f32[i + 3] = v0; u32[i + 4] = col;
+    f32[i + 5] = x1; f32[i + 6] = y1; f32[i + 7] = u1; f32[i + 8] = v0; u32[i + 9] = col;
+    f32[i + 10] = x2; f32[i + 11] = y2; f32[i + 12] = u1; f32[i + 13] = v1; u32[i + 14] = col;
+    f32[i + 15] = x3; f32[i + 16] = y3; f32[i + 17] = u0; f32[i + 18] = v1; u32[i + 19] = col;
+  }
+
+  /* ---- colour ---- */
+  const sctx = document.createElement("canvas").getContext("2d"), pcache = new Map();
+  function parse(s) {
+    let m;
+    if (s.charCodeAt(0) === 35) {
+      if (s.length === 7) return [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16), 1];
+      if (s.length === 4) return [17 * parseInt(s[1], 16), 17 * parseInt(s[2], 16), 17 * parseInt(s[3], 16), 1];
+    } else if ((m = /^rgba?\(([^)]*)\)/.exec(s))) {
+      const p = m[1].split(",").map(Number);
+      return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+    }
+    sctx.fillStyle = "#000"; sctx.fillStyle = s;     // anything else: let the canvas say what it is
+    const n = sctx.fillStyle;
+    return n === s ? [0, 0, 0, 1] : parse(n);
+  }
+
+  /* ---- the path: subpaths as point lists (scene px), a flag for the ones that are plain rects ---- */
+  let pp = new Float64Array(512), np = 0, sb = new Int32Array(64), sr = new Uint8Array(64), ns = 0, cur = false;
+  const addPt = (x, y) => { if (np * 2 + 2 > pp.length) { const n = new Float64Array(pp.length * 2); n.set(pp); pp = n; } pp[np * 2] = x; pp[np * 2 + 1] = y; np++; };
+  const newSub = r => {
+    if (ns === sb.length) { const a = new Int32Array(ns * 2); a.set(sb); sb = a; const b = new Uint8Array(ns * 2); b.set(sr); sr = b; }
+    sb[ns] = np; sr[ns] = r; ns++;
+  };
+
+  /* triangle fans of the subpaths -> the stencil (the parity or winding of the fans is the fill rule) */
+  function fans() {
+    let n = 0;
+    for (let i = 0; i < ns; i++) { const k = (i + 1 < ns ? sb[i + 1] : np) - sb[i]; if (k > 2) n += k - 2; }
+    if (!n) return;
+    if (n * 6 > tri.length) tri = new Float32Array(Math.max(n * 6, tri.length * 2));
+    let o = 0;
+    for (let i = 0; i < ns; i++) {
+      const s = sb[i], e = i + 1 < ns ? sb[i + 1] : np;
+      for (let k = s + 1; k < e - 1; k++) {
+        tri[o++] = pp[s * 2]; tri[o++] = pp[s * 2 + 1]; tri[o++] = pp[k * 2]; tri[o++] = pp[k * 2 + 1]; tri[o++] = pp[k * 2 + 2]; tri[o++] = pp[k * 2 + 3];
+      }
+    }
+    gl.useProgram(PS.p); gl.uniform2f(PS.u.u_inv, 2 / bw, 2 / bh);
+    bindPos(tbo); gl.bufferData(gl.ARRAY_BUFFER, tri.subarray(0, o), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, n * 3);
+  }
+  function posQuad(x0, y0, x1, y1) {                // the bounding box, with whatever program is in use
+    if (tri.length < 12) tri = new Float32Array(12);
+    tri.set([x0, y0, x1, y0, x1, y1, x0, y0, x1, y1, x0, y1]);
+    bindPos(tbo); gl.bufferData(gl.ARRAY_BUFFER, tri.subarray(0, 12), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+  function count() {                                // nonzero winding of the path, counted in the low stencil bits
+    gl.enable(gl.STENCIL_TEST); gl.colorMask(false, false, false, false); gl.stencilMask(0x7F);
+    if (clipOn) gl.stencilFunc(gl.EQUAL, 0x80, 0x80); else gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+    gl.stencilOpSeparate(gl.FRONT, gl.KEEP, gl.KEEP, gl.INCR_WRAP); gl.stencilOpSeparate(gl.BACK, gl.KEEP, gl.KEEP, gl.DECR_WRAP);
+    fans();
+    gl.colorMask(true, true, true, true); gl.stencilMask(0xFF);
+  }
+  function bounds() {
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (let i = 0; i < np; i++) { const x = pp[i * 2], y = pp[i * 2 + 1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    return [x0 - 1, y0 - 1, x1 + 1, y1 + 1];
+  }
+
+  /* radial gradient ramps: 256 px of the canvas's own gradient, premultiplied, one texture per set of stops */
+  const ramps = new Map(), rc = document.createElement("canvas");
+  rc.width = 256; rc.height = 1;
+  const rx = rc.getContext("2d", { willReadFrequently: true });
+  function rampOf(g) {
+    const key = g.stops.join("|");
+    let t = ramps.get(key);
+    if (t) return t;
+    const lg = rx.createLinearGradient(0, 0, 256, 0);
+    for (let i = 0; i < g.stops.length; i += 2) lg.addColorStop(g.stops[i], g.stops[i + 1]);
+    rx.clearRect(0, 0, 256, 1); rx.fillStyle = lg; rx.fillRect(0, 0, 256, 1);
+    const d = rx.getImageData(0, 0, 256, 1).data;
+    for (let i = 0; i < 1024; i += 4) { const a = d[i + 3] / 255; d[i] = Math.round(d[i] * a); d[i + 1] = Math.round(d[i + 1] * a); d[i + 2] = Math.round(d[i + 2] * a); }
+    t = tex(gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(d.buffer, d.byteOffset, 1024));
+    gl.bindTexture(gl.TEXTURE_2D, atlas);
+    ramps.set(key, t);
+    return t;
+  }
+
+  /* ---- the context itself ---- */
+  const pool = [];
+  for (let i = 0; i < 8; i++) pool.push({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, ga: 1, fs: "", font: "", ta: "", op: "", clip: false });
+  let sp = 0;
+  const X = {
+    a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, globalAlpha: 1, font: "14px sans-serif", textAlign: "left", textBaseline: "alphabetic", imageSmoothingEnabled: false,
+    _fs: "#000", _rgba: [0, 0, 0, 1], _grad: null, _pk: 0, _pa: -1, _dirty: true,
+    get fillStyle() { return this._fs; },
+    set fillStyle(v) {
+      if (v === this._fs && !this._dirty) return;
+      this._fs = v; this._dirty = true;
+      if (typeof v === "string") { let p = pcache.get(v); if (!p) { p = parse(v); pcache.set(v, p); } this._rgba = p; this._grad = null; }
+      else { this._grad = v; this._rgba = null; }
+    },
+    get globalCompositeOperation() { return blendOp; },
+    set globalCompositeOperation(v) { if (v !== blendOp) { flush(); blendOp = v; } },
+    pack() {                                        // colour x alpha, premultiplied, as one 32-bit word (cached while neither changes)
+      if (this._dirty || this.globalAlpha !== this._pa) {
+        const p = this._rgba, ga = this.globalAlpha;
+        if (!p) this._pk = 0;
+        else {
+          let al = p[3] * ga; al = al < 0 ? 0 : al > 1 ? 1 : al;
+          this._pk = (((al * 255 + 0.5) << 24) | ((p[2] * al + 0.5) << 16) | ((p[1] * al + 0.5) << 8) | (p[0] * al + 0.5 | 0)) >>> 0;
+        }
+        this._pa = ga; this._dirty = false;
+      }
+      return this._pk;
+    },
+    save() {
+      if (sp === pool.length) pool.push({});
+      const s = pool[sp++];
+      s.a = this.a; s.b = this.b; s.c = this.c; s.d = this.d; s.e = this.e; s.f = this.f; s.ga = this.globalAlpha; s.fs = this._fs;
+      s.font = this.font; s.ta = this.textAlign; s.op = blendOp; s.clip = clipOn;
+    },
+    restore() {
+      if (!sp) return;
+      const s = pool[--sp];
+      this.a = s.a; this.b = s.b; this.c = s.c; this.d = s.d; this.e = s.e; this.f = s.f; this.globalAlpha = s.ga; this.fillStyle = s.fs;
+      this.font = s.font; this.textAlign = s.ta; this.globalCompositeOperation = s.op;
+      if (clipOn && !s.clip) { flush(); gl.stencilMask(0xFF); gl.disable(gl.SCISSOR_TEST); gl.clear(gl.STENCIL_BUFFER_BIT); clipOn = false; }
+    },
+    translate(x, y) { this.e += this.a * x + this.c * y; this.f += this.b * x + this.d * y; },
+    scale(x, y) { this.a *= x; this.b *= x; this.c *= y; this.d *= y; },
+    rotate(t) {
+      const c = Math.cos(t), s = Math.sin(t), a = this.a, b = this.b;
+      this.a = a * c + this.c * s; this.b = b * c + this.d * s; this.c = -a * s + this.c * c; this.d = -b * s + this.d * c;
+    },
+    setTransform(a, b, c, d, e, f) { this.a = a; this.b = b; this.c = c; this.d = d; this.e = e; this.f = f; },
+    fillRect(x, y, w, h) {
+      const col = this.pack();
+      if (col >>> 24 === 0) return;
+      const a = this.a, d = this.d, e = this.e, f = this.f;
+      if (this.b === 0 && this.c === 0) quad(a * x + e, d * y + f, a * (x + w) + e, d * (y + h) + f, WU, WU, WU, WU, col);
+      else { const b = this.b, c = this.c; quad4(a * x + c * y + e, b * x + d * y + f, a * (x + w) + c * y + e, b * (x + w) + d * y + f, a * (x + w) + c * (y + h) + e, b * (x + w) + d * (y + h) + f, a * x + c * (y + h) + e, b * x + d * (y + h) + f, WU, WU, WU, WU, col); }
+    },
+    clearRect(x, y, w, h) {
+      flush();
+      const a = this.a, d = this.d, e = this.e, f = this.f;
+      let x0 = Math.round(a * x + e), x1 = Math.round(a * (x + w) + e), y0 = Math.round(d * y + f), y1 = Math.round(d * (y + h) + f);
+      if (x0 > x1) { const t = x0; x0 = x1; x1 = t; } if (y0 > y1) { const t = y0; y0 = y1; y1 = t; }
+      gl.colorMask(true, true, true, true); gl.clearColor(0, 0, 0, 0);
+      const full = x0 <= 0 && y0 <= 0 && x1 >= bw && y1 >= bh;
+      if (full) gl.disable(gl.SCISSOR_TEST); else { gl.enable(gl.SCISSOR_TEST); gl.scissor(x0, bh - y1, x1 - x0, y1 - y0); }
+      gl.stencilMask(0xFF);
+      gl.clear(full ? gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT : gl.COLOR_BUFFER_BIT);
+      gl.disable(gl.SCISSOR_TEST);
+      if (full) clipOn = false;
+    },
+    beginPath() { np = 0; ns = 0; cur = false; },
+    moveTo(x, y) { newSub(0); addPt(this.a * x + this.c * y + this.e, this.b * x + this.d * y + this.f); cur = true; },
+    lineTo(x, y) { if (!cur) { this.moveTo(x, y); return; } addPt(this.a * x + this.c * y + this.e, this.b * x + this.d * y + this.f); },
+    closePath() { cur = false; },
+    rect(x, y, w, h) {
+      const a = this.a, b = this.b, c = this.c, d = this.d, e = this.e, f = this.f;
+      newSub(b === 0 && c === 0 ? 1 : 0);
+      addPt(a * x + c * y + e, b * x + d * y + f); addPt(a * (x + w) + c * y + e, b * (x + w) + d * y + f);
+      addPt(a * (x + w) + c * (y + h) + e, b * (x + w) + d * (y + h) + f); addPt(a * x + c * (y + h) + e, b * x + d * (y + h) + f);
+      cur = false;
+    },
+    arc(cx, cy, r, a0, a1, ccw) {
+      const TAU = 6.283185307179586;
+      let sw = a1 - a0;
+      if (!ccw) { if (sw >= TAU) sw = TAU; else if (sw < 0) sw = sw % TAU + TAU; }
+      else { if (sw <= -TAU) sw = -TAU; else if (sw > 0) sw = sw % TAU - TAU; }
+      const sc = Math.sqrt(Math.abs(this.a * this.d - this.b * this.c)), n = Math.max(8, Math.ceil(Math.abs(sw) * r * sc / 2));
+      if (!cur) { newSub(0); cur = true; }
+      for (let i = 0; i <= n; i++) {
+        const t = a0 + sw * i / n, x = cx + Math.cos(t) * r, y = cy + Math.sin(t) * r;
+        addPt(this.a * x + this.c * y + this.e, this.b * x + this.d * y + this.f);
+      }
+    },
+    createRadialGradient(x0, y0, r0, x1, y1, r1) {
+      return { x0, y0, r0, x1, y1, r1, stops: [], addColorStop(o, c) { this.stops.push(o, c); } };
+    },
+    fill() {
+      if (!ns) return;
+      const g = this._grad;
+      if (!g) {
+        const col = this.pack();
+        if (col >>> 24 === 0) return;
+        let allRects = true;
+        for (let i = 0; i < ns; i++) if (!sr[i]) { allRects = false; break; }
+        if (allRects) {                             // plain rects (wires, rain, discs): straight into the batch
+          for (let i = 0; i < ns; i++) { const s = sb[i] * 2; quad(pp[s], pp[s + 1], pp[s + 4], pp[s + 5], WU, WU, WU, WU, col); }
+          return;
+        }
+        flush(); count();
+        const bb = bounds();
+        quad(bb[0], bb[1], bb[2], bb[3], WU, WU, WU, WU, col);
+        cover = true; flush(); cover = false;
+        return;
+      }
+      flush(); count();
+      const bb = bounds(), sc = Math.sqrt(Math.abs(this.a * this.d - this.b * this.c));
+      gl.useProgram(PG.p); gl.uniform2f(PG.u.u_inv, 2 / bw, 2 / bh);
+      gl.uniform2f(PG.u.u_c, this.a * g.x1 + this.c * g.y1 + this.e, this.b * g.x1 + this.d * g.y1 + this.f);
+      gl.uniform2f(PG.u.u_r, g.r0 * sc, g.r1 * sc); gl.uniform1f(PG.u.u_a, this.globalAlpha);
+      gl.uniform1i(PG.u.u_ramp, 1);
+      const rt = rampOf(g);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, rt); gl.activeTexture(gl.TEXTURE0);
+      setBlend(); cover = true; setTest(); cover = false;
+      posQuad(bb[0], bb[1], bb[2], bb[3]);
+      gl.stencilMask(0xFF);
+      if (!clipOn) gl.disable(gl.STENCIL_TEST);
+    },
+    clip(rule) {
+      if (!ns) return;
+      flush();
+      if (clipOn) { gl.stencilMask(0xFF); gl.disable(gl.SCISSOR_TEST); gl.clear(gl.STENCIL_BUFFER_BIT); }
+      gl.enable(gl.STENCIL_TEST); gl.colorMask(false, false, false, false);
+      if (rule === "evenodd" || ns === 1) {         // parity of the fans = even-odd (and any one simple outline)
+        gl.stencilMask(0x80); gl.stencilFunc(gl.ALWAYS, 0, 0xFF); gl.stencilOp(gl.INVERT, gl.INVERT, gl.INVERT);
+        fans();
+      } else {
+        count();
+        gl.enable(gl.STENCIL_TEST); gl.colorMask(false, false, false, false);
+        gl.stencilMask(0xFF); gl.stencilFunc(gl.NOTEQUAL, 0x80, 0x7F); gl.stencilOp(gl.KEEP, gl.REPLACE, gl.REPLACE);
+        gl.useProgram(PS.p); gl.uniform2f(PS.u.u_inv, 2 / bw, 2 / bh);
+        const bb = bounds(); posQuad(bb[0], bb[1], bb[2], bb[3]);
+      }
+      gl.colorMask(true, true, true, true); gl.stencilMask(0xFF);
+      clipOn = true;
+    },
+    measureText(s) { if (afont !== this.font) { ax.font = this.font; afont = this.font; ax.textAlign = "left"; ax.textBaseline = "alphabetic"; } return ax.measureText(s); },
+    fillText(s, x, y) {
+      const col = this.pack();
+      if (col >>> 24 === 0) return;
+      const e = glyphs(this.font, s);
+      const x0 = (this.textAlign === "center" ? x - e.adv / 2 : this.textAlign === "right" ? x - e.adv : x) - PAD, y0 = y - e.asc - PAD, w = e.w / gR, h = e.h / gR;
+      const u0 = e.x / AS, v0 = e.y / AS, u1 = (e.x + e.w) / AS, v1 = (e.y + e.h) / AS;
+      const a = this.a, b = this.b, c = this.c, d = this.d, tx = this.e, ty = this.f;
+      if (b === 0 && c === 0) quad(a * x0 + tx, d * y0 + ty, a * (x0 + w) + tx, d * (y0 + h) + ty, u0, v0, u1, v1, col);
+      else quad4(a * x0 + c * y0 + tx, b * x0 + d * y0 + ty, a * (x0 + w) + c * y0 + tx, b * (x0 + w) + d * y0 + ty,
+                 a * (x0 + w) + c * (y0 + h) + tx, b * (x0 + w) + d * (y0 + h) + ty, a * x0 + c * (y0 + h) + tx, b * x0 + d * (y0 + h) + ty, u0, v0, u1, v1, col);
+    }
+  };
+
+  /* ---- the last pass: the scene up to the screen (nearest-neighbour), shaken, with scanlines ---- */
+  function present(shx, shy) {
+    flush();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, cw_, ch_);
+    gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST);
+    gl.useProgram(PQ.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.uniform1i(PQ.u.u_scene, 0); gl.uniform2f(PQ.u.u_out, cw_, ch_);
+    gl.uniform2f(PQ.u.u_shake, shx * kdev, shy * kdev); gl.uniform1i(PQ.u.u_mode, scanMode); gl.uniform1f(PQ.u.u_O, scanO);
+    bindPos(fbo_tri);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.viewport(0, 0, bw, bh);
+    gl.enable(gl.BLEND);
+    gl.bindTexture(gl.TEXTURE_2D, atlas);
+  }
+  function size(devW, devH, ds) {                   // the screen-sized canvas: device px, but never more than ~8 Mpx
+    const k = devW * devH > 8.3e6 ? Math.sqrt(8.3e6 / (devW * devH)) : 1;
+    const w = Math.max(1, Math.floor(devW * k)), h = Math.max(1, Math.floor(devH * k));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; gl.viewport(0, 0, bw, bh); }   // (resizing the canvas resets the viewport)
+    cw_ = w; ch_ = h; kdev = w / devW;
+    scanO = Math.max(3, Math.round(1.5 * ds * kdev));
+    scanMode = { off: 0, lines: 1, soft: 2, grille: 3 }[SCAN_STYLE];
+  }
+  function clearText() { flush(); atlasReset(); }
+
+  gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.DITHER); gl.enable(gl.BLEND);
+  gl.clearColor(0, 0, 0, 0);
+  resizeScene(Math.max(1, W), Math.max(1, H), 1);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("framebuffer incomplete");
+  return { gl, cv, ctx: X, buf, resizeScene, size, present, clearText };
+}
+let GLR = null, RENDERER = "2D";
+if (!FORCE2D && window.WebGLRenderingContext) {
+  try {
+    const gc = document.createElement("canvas");
+    const gl = gc.getContext("webgl", { alpha: true, premultipliedAlpha: true, stencil: true, antialias: false, depth: false, preserveDrawingBuffer: false });
+    if (gl && gl instanceof WebGLRenderingContext) {
+      gc.addEventListener("webglcontextlost", e => { e.preventDefault(); useCanvas2D(); });
+      GLR = makeGL(gl, gc);
+      document.getElementById("screen").insertBefore(gc, scan);
+      cvs.style.display = scan.style.display = "none";
+      RENDERER = "GL";
+    }
+  } catch (e) { GLR = null; }
+}
+let buf = GLR ? GLR.buf : cvs;
+let ctx = GLR ? GLR.ctx : cvs.getContext("2d");     // with alpha: the sky is painted in behind it all, last
+function useCanvas2D() {                              // the GL context was lost: carry on in 2D
+  if (!GLR) return;
+  const gc = GLR.cv;
+  GLR = null; RENDERER = "2D";
+  if (gc.parentNode) gc.parentNode.removeChild(gc);
+  cvs.style.display = ""; scan.style.display = "";
+  buf = cvs; ctx = cvs.getContext("2d");
+  fit();
+}
 const BUF_MAX = 2.1e6, LOWRES = /[?&]lowres(=|&|$)/.test(location.search), SHOWFPS = /[?&]fps(=|&|$)/.test(location.search);
 let DPR = 1;
 const stage = document.getElementById("stage");
@@ -1956,8 +2447,10 @@ function fit() {
   const devW = Math.max(1, Math.floor(W * DS)), devH = Math.max(1, Math.floor(H * DS));
   DS = Math.min(devW / W, devH / H);
   DPR = dpr;
-  for (const c of [cvs, scan]) { c.style.width = (devW / dpr) + "px"; c.style.height = (devH / dpr) + "px"; }
-  if (scan.width !== devW || scan.height !== devH) {
+  for (const c of GLR ? [GLR.cv] : [cvs, scan]) { c.style.width = (devW / dpr) + "px"; c.style.height = (devH / dpr) + "px"; }
+  if (GLR) GLR.size(devW, devH, DS);
+  else if (SCAN_STYLE === "off") scan.style.display = "none";
+  else if (scan.width !== devW || scan.height !== devH) {
     // scanlines = exact device pixels at an integer period (~1.5 logical px), drawn once
     scan.width = devW; scan.height = devH;
     const sc = scan.getContext("2d"), O = Math.max(3, Math.round(1.5 * DS));
@@ -1968,7 +2461,10 @@ function fit() {
   // above BUF_MAX pixels); the browser stretches it (nearest-neighbour) to the screen
   let r = LOWRES ? 1 : Math.max(1, Math.floor(DS));
   while (r > 1 && W * H * r * r > BUF_MAX) r--;
-  if (r !== R || buf.width !== W * r || buf.height !== H * r) { R = r; buf.width = W * R; buf.height = H * R; }
+  if (r !== R || buf.width !== W * r || buf.height !== H * r) {
+    R = r;
+    if (GLR) GLR.resizeScene(W * R, H * R, R); else { buf.width = W * R; buf.height = H * R; }
+  }
   ctx.setTransform(R, 0, 0, R, 0, 0);
   ctx.imageSmoothingEnabled = false;
 }
@@ -1976,7 +2472,7 @@ fit();
 addEventListener("resize", fit);
 addEventListener("orientationchange", fit);
 if (window.ResizeObserver) new ResizeObserver(fit).observe(stage);   // caption reflow, toolbars, iframes
-if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (GLR) GLR.clearText(); fit(); });   // (text drawn in the fallback face is drawn again)
 
 function px(x, y, w, h, col) {
   ctx.fillStyle = col;
@@ -3708,11 +4204,14 @@ function draw() {
   /* a crash or a quake shakes the whole screen (a quake mostly side to side): the canvas
      itself is moved, in whole device px, over the black behind it; the scanlines stay put */
   const qa = quakeShake(), ba = shakeT > 0 ? BOOM.shake * (shakeT / BOOM.shakeT) ** 1.5 : 0;
-  let sh = "";
-  if (qa > 0 || ba > 0) {
+  let sx = 0, sy = 0;
+  const shaking = qa > 0 || ba > 0;
+  if (shaking) {
     const a = Math.max(qa, ba) * DS, vy = ba >= qa ? 1 : 0.45;
-    sh = "translate(" + Math.round((Math.random() * 2 - 1) * a) / DPR + "px," + Math.round((Math.random() * 2 - 1) * a * vy) / DPR + "px)";
+    sx = Math.round((Math.random() * 2 - 1) * a); sy = Math.round((Math.random() * 2 - 1) * a * vy);
   }
+  if (GLR) { GLR.present(sx, sy); return; }       // (GL: the last pass shakes the picture, and the scanlines stay put)
+  const sh = shaking ? "translate(" + sx / DPR + "px," + sy / DPR + "px)" : "";
   if (sh !== shakeCss) { cvs.style.transform = sh; shakeCss = sh; }
 }
 let shakeCss = "";
@@ -3866,7 +4365,7 @@ function loop(now) {
     pf.d2 += (gap - k * vsync) ** 2;   // off the refreshes it spans
     if (now - pf.t0 >= 1000) {
       perfLine = [pf.n + " FPS " + Math.round(1 / vsync) + "HZ" + (every > 1 ? "/" + every : "") + " MAX " + Math.round(pf.worst) + " JIT " + (1000 * Math.sqrt(pf.d2 / pf.n)).toFixed(1),
-                  "SIM " + (pf.st / pf.n).toFixed(1) + " DRAW " + (pf.dr / pf.n).toFixed(1) + " " + buf.width + "X" + buf.height];
+                  "SIM " + (pf.st / pf.n).toFixed(1) + " DRAW " + (pf.dr / pf.n).toFixed(1) + " " + buf.width + "X" + buf.height + " " + RENDERER];
       pf = { n: 0, t0: now, st: 0, dr: 0, worst: 0, steps: 0, d2: 0 };
     }
   }

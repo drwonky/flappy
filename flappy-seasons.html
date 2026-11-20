@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r30</div>
+<div id="hud">seasons r31</div>
 
 <script>
 "use strict";
@@ -3759,14 +3759,32 @@ let last = performance.now(), vsync = 1 / 60;
    at 50 Hz a steady 2-2-3 judder). That time is then split into equal sub-steps of
    at most 1/120 s - at 60 Hz exactly the old two 1/120 s steps. At most 0.1 s a
    frame: a device that falls behind plays a little slow instead of spiralling. */
+/* A fast display the device can't keep up with (a 120 Hz TV that misses every few
+   frames) shows some frames once and some twice: worse than a steady 60. So if more
+   than 1 frame in 12 misses at over 90 Hz, it draws on every other refresh from then
+   on. ?hz=60 (or 30...) sets the rate outright. */
+const HZCAP = qnum("hz") > 0 ? qnum("hz") : 0;
+let every = 1, pace = { t0: 0, n: 0, miss: 0 };
 let perfLine = [], pf = { n: 0, t0: 0, st: 0, dr: 0, worst: 0, steps: 0, d2: 0, dd: 0 };
+let lastRaw = last;
 function loop(now) {
+  const raw = Math.max(0, now - lastRaw) / 1000, rr = raw / vsync;   // the display's refresh, learned from every callback
+  lastRaw = now;
+  if (rr > 0.75 && rr < 1.3) vsync += (raw - vsync) * 0.05;         // one refresh: keep the estimate sharp
+  else if (rr <= 0.75 && raw > 0.003) vsync += (raw - vsync) * 0.2; // a faster display than we thought
+  if (HZCAP) every = Math.max(1, Math.round(1 / vsync / HZCAP));
+  if (every > 1 && now - last < (every - 0.5) * vsync * 1000) { requestAnimationFrame(loop); return; }   // a refresh we sit out
   const gap = Math.max(0, now - last) / 1000;     // (the first frame's stamp can be from before the page started)
   last = now;
   const r = gap / vsync;
-  if (r > 0.75 && r < 1.3) vsync += (gap - vsync) * 0.05;           // one refresh: keep the estimate sharp
-  else if (r <= 0.75 && gap > 0.003) vsync += (gap - vsync) * 0.2;  // a faster display than we thought
   const k = Math.max(1, Math.round(r));
+  if (every === 1 && !HZCAP && gap > 0) {             // keeping up with a fast display?
+    pace.n++; if (k >= 2) pace.miss++;
+    if (now - pace.t0 > 2000) {
+      if (vsync < 1 / 90 && pace.n > 30 && pace.miss / pace.n > 1 / 12) every = 2;
+      pace = { t0: now, n: 0, miss: 0 };
+    }
+  }
   const fdt = Math.min(0.1, Math.abs(r - k) < 0.4 ? k * vsync : gap);
   const n = Math.max(1, Math.ceil(fdt / FIXED - 0.1)), h = fdt / n;   // (59.9 Hz: still 2 steps)
   const t0 = SHOWFPS ? performance.now() : 0;
@@ -3775,9 +3793,9 @@ function loop(now) {
   draw();
   if (SHOWFPS) {                                   // ?fps: frames a second, the display rate, ms per frame in the sim and the paint, the worst gap, the jitter
     pf.n++; pf.st += t1 - t0; pf.dr += performance.now() - t1; pf.worst = Math.max(pf.worst, gap * 1000); pf.steps += n;
-    pf.d2 += (gap - vsync) ** 2;
+    pf.d2 += (gap - k * vsync) ** 2;   // off the refreshes it spans
     if (now - pf.t0 >= 1000) {
-      perfLine = [pf.n + " FPS " + Math.round(1 / vsync) + "HZ MAX " + Math.round(pf.worst) + " JIT " + (1000 * Math.sqrt(pf.d2 / pf.n)).toFixed(1),
+      perfLine = [pf.n + " FPS " + Math.round(1 / vsync) + "HZ" + (every > 1 ? "/" + every : "") + " MAX " + Math.round(pf.worst) + " JIT " + (1000 * Math.sqrt(pf.d2 / pf.n)).toFixed(1),
                   "SIM " + (pf.st / pf.n).toFixed(1) + " DRAW " + (pf.dr / pf.n).toFixed(1) + " " + buf.width + "X" + buf.height];
       pf = { n: 0, t0: now, st: 0, dr: 0, worst: 0, steps: 0, d2: 0 };
     }

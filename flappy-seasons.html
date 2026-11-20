@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r29</div>
+<div id="hud">seasons r30</div>
 
 <script>
 "use strict";
@@ -3751,23 +3751,35 @@ windIn.addEventListener("keydown", e => {         // 1000 fine steps are for dra
   changeWind(sliderToWind(+windIn.value));
 });
 reset();
-let acc = 0, last = performance.now();
-/* At most 0.1 s of catch-up per frame: a device that falls behind plays a little slow
-   instead of spiralling (each slow frame queueing more steps, which make the next one slower). */
-let perfLine = [], pf = { n: 0, t0: 0, st: 0, dr: 0, worst: 0 };
+let last = performance.now(), vsync = 1 / 60;
+/* FRAME PACING - every frame moves the world by exactly the time it is on screen.
+   The display's refresh interval is learned from the frame times, and each frame's
+   time is snapped to a whole number of refreshes (rAF timestamps jitter by a ms or
+   two, which with fixed steps meant 1, 2 or 3 steps in a frame: visible lurches, and
+   at 50 Hz a steady 2-2-3 judder). That time is then split into equal sub-steps of
+   at most 1/120 s - at 60 Hz exactly the old two 1/120 s steps. At most 0.1 s a
+   frame: a device that falls behind plays a little slow instead of spiralling. */
+let perfLine = [], pf = { n: 0, t0: 0, st: 0, dr: 0, worst: 0, steps: 0, d2: 0, dd: 0 };
 function loop(now) {
-  const gap = now - last;
-  acc = Math.min(0.1, acc + gap / 1000);
+  const gap = Math.max(0, now - last) / 1000;     // (the first frame's stamp can be from before the page started)
   last = now;
+  const r = gap / vsync;
+  if (r > 0.75 && r < 1.3) vsync += (gap - vsync) * 0.05;           // one refresh: keep the estimate sharp
+  else if (r <= 0.75 && gap > 0.003) vsync += (gap - vsync) * 0.2;  // a faster display than we thought
+  const k = Math.max(1, Math.round(r));
+  const fdt = Math.min(0.1, Math.abs(r - k) < 0.4 ? k * vsync : gap);
+  const n = Math.max(1, Math.ceil(fdt / FIXED - 0.1)), h = fdt / n;   // (59.9 Hz: still 2 steps)
   const t0 = SHOWFPS ? performance.now() : 0;
-  while (acc >= FIXED) { step(FIXED); acc -= FIXED; }
+  if (gap > 0) for (let i = 0; i < n; i++) step(h);
   const t1 = SHOWFPS ? performance.now() : 0;
   draw();
-  if (SHOWFPS) {                                   // ?fps: frames a second, ms per frame in the sim and the paint, the worst gap
-    pf.n++; pf.st += t1 - t0; pf.dr += performance.now() - t1; pf.worst = Math.max(pf.worst, gap);
+  if (SHOWFPS) {                                   // ?fps: frames a second, the display rate, ms per frame in the sim and the paint, the worst gap, the jitter
+    pf.n++; pf.st += t1 - t0; pf.dr += performance.now() - t1; pf.worst = Math.max(pf.worst, gap * 1000); pf.steps += n;
+    pf.d2 += (gap - vsync) ** 2;
     if (now - pf.t0 >= 1000) {
-      perfLine = [pf.n + " FPS  MAX " + Math.round(pf.worst) + "MS", "SIM " + (pf.st / pf.n).toFixed(1) + " DRAW " + (pf.dr / pf.n).toFixed(1) + " " + buf.width + "X" + buf.height];
-      pf = { n: 0, t0: now, st: 0, dr: 0, worst: 0 };
+      perfLine = [pf.n + " FPS " + Math.round(1 / vsync) + "HZ MAX " + Math.round(pf.worst) + " JIT " + (1000 * Math.sqrt(pf.d2 / pf.n)).toFixed(1),
+                  "SIM " + (pf.st / pf.n).toFixed(1) + " DRAW " + (pf.dr / pf.n).toFixed(1) + " " + buf.width + "X" + buf.height];
+      pf = { n: 0, t0: now, st: 0, dr: 0, worst: 0, steps: 0, d2: 0 };
     }
   }
   requestAnimationFrame(loop);

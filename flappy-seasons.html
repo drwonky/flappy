@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r32</div>
+<div id="hud">seasons r33</div>
 
 <script>
 "use strict";
@@ -778,7 +778,14 @@ function wantFlap(n) {
   return apex >= n.top + HH + usable() * MARGIN_FRAC;
 }
 
+/* Things that are only LOOKED AT (rain, leaves and dust, smoke, the bird's smoke
+   trail) move once per drawn frame, by the frame's whole time, not at every 1/120 s
+   sub-step: the same motion on screen for half the work at 60 Hz. The loop marks the
+   last sub-step of a frame; anything else calling step() moves them every time. */
+let lastSub = true, cosAcc = 0, cosDt = 0;
 function step(dt) {
+  cosAcc += dt; cosDt = 0;
+  if (lastSub) { cosDt = cosAcc; cosAcc = 0; }
   flash = Math.max(0, flash - dt * 3);
   airClock += dt;
   stepDisco(dt);
@@ -792,8 +799,9 @@ function step(dt) {
   if (dead) {
     gspd = 0;                      // ...but the world no longer scrolls
     cloudX += -airU * 0.3 * dt;
-    stepSmoke(dt); stepCover(dt); stepTrail(dt); stepRain(dt); stepStorm(dt);
-    stepAir(dt); stepFeathers(dt); stepBoom(dt); stepDeath(dt); return;
+    stepCover(dt); stepStorm(dt);
+    if (cosDt) { stepSmoke(cosDt); stepTrail(cosDt); stepRain(cosDt); stepAir(cosDt); }
+    stepFeathers(dt); stepBoom(dt); stepDeath(dt); return;
   }
   stepFeathers(dt);
   clock += dt; stageT += dt;
@@ -821,9 +829,9 @@ function step(dt) {
   currents = currents.filter(c => c.x + c.w / 2 > -10);
   for (const c of cacti) c.x -= gspd * dt;
   cacti = cacti.filter(c => c.x + 30 > 0);
-  stepSmoke(dt);
+  if (cosDt) stepSmoke(cosDt);
   stepCover(dt);
-  stepRain(dt);
+  if (cosDt) stepRain(cosDt);
   stepStorm(dt);
 
   // what the bird feels: capped lift/sink plus a zero-mean wobble in gusts and at column edges
@@ -878,8 +886,7 @@ function step(dt) {
   }
   pipes = pipes.filter(p => p.x + PIPE_W + CAP_X > -REACH);
   stepQuake(dt);                   // after the pipes move: the fallen ones keep pace
-  stepAir(dt);                     // after the pipes move, so nothing is left overlapping one
-  stepTrail(dt);
+  if (cosDt) { stepAir(cosDt); stepTrail(cosDt); }   // after the pipes move, so nothing is left overlapping one
 
   if (bird.y + HH >= SKY || bird.y - HH <= 0) { die(birdX, bird.y + (bird.y > SKY / 2 ? HH : -HH), "ground"); return; }
   if (!quake || quake.rose) for (const p of pipes) {   // from the first rumble the pipes cannot hurt it
@@ -1116,10 +1123,11 @@ function stepRain(dt) {
   const lead = Math.max(0, -flow) * SKY / RAIN.speed, trail = Math.max(0, flow) * SKY / RAIN.speed;
   for (; n > 0; n--) if (Math.random() < n && rain.length < RAIN.max * WK * (1 + ts.I))
     rain.push({ x: -trail - 4 + Math.random() * (W + lead + trail + 8), y: -6 - Math.random() * 20, vy: RAIN.speed + Math.random() * 60 });
+  const nearG = SKY - Math.max(2.1 * coverD(), waterD) - 2;   // nothing can stand higher than this
   for (const d of rain) {
     d.x += flow * dt; d.y += d.vy * dt; d.sl = flow / d.vy;
     const X = Math.round(d.x), Y = Math.round(d.y);
-    const gh = groundCoverH(d.x), sh = Math.max(gh, waterD);          // the ground, or the water standing on it
+    const gh = Y >= nearG ? groundCoverH(d.x) : 0, sh = Math.max(gh, waterD);          // the ground, or the water standing on it
     if (Y >= SKY - sh) { d.dead = 1; splash(X, Math.round(SKY - sh) - 1, waterD > gh ? "rgba(200,225,255,.9)" : groundSplash()); continue; }
     for (const p of pipes) {                          // the pipes are solid: it splashes where it hits
       if (X < p.x - CAP_X - 2 || X > p.x + PIPE_W + CAP_X + 2) continue;
@@ -2060,14 +2068,19 @@ function shadowCol() { return "rgba(40,22,10," + (0.30 * SFX.vis * Math.min(1.25
 function drawShadows() {                           // the pipes' shade, painted row by row
   if (Math.abs(sunSX) > 2) return;
   ctx.fillStyle = shadowCol();
+  let run = [], y0 = 0;                             // rows with the same spans go down as one tall rect
+  const flush = y => { for (let i = 0; i < run.length; i += 2) ctx.fillRect(run[i], y0, run[i + 1] - run[i], y - y0); };   // (separate fills: where two spans overlap, the shade doubles)
   for (let y = 0; y < SKY; y += 2) {
     SPANS.length = 0;
     for (const p of pipes) pipeShadows(y + 1, p, SPANS);
+    const row = [];
     for (let i = 0; i < SPANS.length; i += 2) {
       const lo = Math.max(0, Math.round(SPANS[i])), hi = Math.min(W, Math.round(SPANS[i + 1]));
-      if (hi > lo) ctx.fillRect(lo, y, hi - lo, 2);
+      if (hi > lo) row.push(lo, hi);
     }
+    if (row.length !== run.length || row.some((v, i) => v !== run[i])) { flush(y); run = row; y0 = y; }
   }
+  flush(Math.ceil(SKY / 2) * 2);
 }
 function groundShadows() {                         // ...and where it falls across the ground
   SPANS.length = 0;
@@ -2141,10 +2154,12 @@ function drawFlowers() {                           // they come up as spring arr
 function drawRain() {                              // behind the pipes (they are solid: drops end on them)
   if (!rain.length && !splashes.length) return;
   ctx.fillStyle = "rgba(205,228,255,.7)";
+  ctx.beginPath();                                 // every drop in one path, one fill
   for (const d of rain) {
     const X = Math.round(d.x), Y = Math.round(d.y), o = Math.round(d.sl * 2);
-    ctx.fillRect(X, Y - 1, 1, 2); ctx.fillRect(X - o, Y - 3, 1, 2);
+    ctx.rect(X, Y - 1, 1, 2); ctx.rect(X - o, Y - 3, 1, 2);
   }
+  ctx.fill();
   for (const q of splashes) { ctx.fillStyle = q.col || "rgba(220,238,255,.8)"; const e = Math.round(q.age * 20); ctx.fillRect(Math.round(q.x) - 1 - e, Math.round(q.y) - e, 1, 1); ctx.fillRect(Math.round(q.x) + 1 + e, Math.round(q.y) - e, 1, 1); }
 }
 function drawStrikes(layer) {                     // glow, then the white-hot core; forks thinner
@@ -2344,12 +2359,14 @@ const HOT_PALS = [0, 1, 2, 3, 4].map(i => {         // yellow -> orange -> scorc
 });
 function heatPal() { return HOT_PALS[Math.min(4, Math.round(heatE() * 4))]; }
 /* What the sun is doing to the bird, drawn where you are looking: */
-function disc(cx, cy, r, col) {                   // a pixel circle, 2px rows
+function disc(cx, cy, r, col) {                   // a pixel circle, 2px rows (one path, one fill: the rows never overlap)
   ctx.fillStyle = col;
+  ctx.beginPath();
   for (let y = -r; y < r; y += 2) {
     const h = Math.round(Math.sqrt(r * r - (y + 1) * (y + 1)));
-    ctx.fillRect(Math.round(cx - h), Math.round(cy + y), 2 * h, 2);
+    if (h > 0) ctx.rect(Math.round(cx - h), Math.round(cy + y), 2 * h, 2);
   }
+  ctx.fill();
 }
 function drawBirdAura() {                          // 2. a red glow that grows with the heat, in sun or shade
   if (dead) return;
@@ -2376,23 +2393,32 @@ function pipeSand(p) {                             // the heap on a bottom lip, 
   const L = Math.round(p.x), T = Math.round(p.top), B = Math.round(p.bot), h = pipeCoverH(p), x0 = L - CAP_X - 1;
   if (h < 0.5) return;
   const fs = snowFrac(), fi = iceFrac();
-  for (let i = 0; i < SAND_COLS; i++) {
+  const col = i => {                                // [ice, snow, sand, lit] of column i, or null
     const hc0 = Math.round(lipCol(h, i) - p.cut[i]);
-    if (hc0 <= 0) continue;
+    if (hc0 <= 0) return null;
     const hi = Math.min(hc0, Math.round(hc0 * fi + (fi > 0.02 ? 0.5 : 0))), hc = hc0 - hi;   // the crust on top of it all
-    const hs = Math.round(hc * fs / Math.max(1e-6, 1 - fi)), hd = hc - hs, X = x0 + i * 2;     // snow on top, sand below
-    if (hi > 0) iceCrust(X, B - hc0, 2, hi, ((i * 7 + Math.round(p.x)) & 31) === 0);
-    const lit = i < SAND_COLS * 0.6 ? 0.75 : 0.5;                    // lit from the left, like the pipes
+    const hs = Math.round(hc * fs / Math.max(1e-6, 1 - fi));                                 // snow on top, sand below
+    return [hi, hs, hc - hs, i < SAND_COLS * 0.6 ? 0.75 : 0.5];     // lit from the left, like the pipes
+  };
+  for (let i = 0; i < SAND_COLS; ) {
+    const c = col(i);
+    if (!c) { i++; continue; }
+    const [hi, hs, hd, lit] = c, hc = hs + hd, X = x0 + i * 2;
+    let j = i + 1;                                   // the same heap in the next columns: one wider rect (not under ice, which glints per column)
+    if (hi === 0) for (let q; j < SAND_COLS && (q = col(j)) && q[0] === 0 && q[1] === hs && q[2] === hd && q[3] === lit; j++);
+    const w = 2 * (j - i);
+    if (hi > 0) iceCrust(X, B - hc - hi, 2, hi, ((i * 7 + Math.round(p.x)) & 31) === 0);
     if (hd > 0) {
-      ctx.fillStyle = C.duneEdge; ctx.fillRect(X, B - 1, 2, 1);
-      ctx.fillStyle = C.duneShade; ctx.fillRect(X, B - hd, 2, Math.max(0, hd - 1));
-      ctx.fillStyle = C.dune; ctx.fillRect(X, B - hd, 2, Math.max(1, Math.ceil(hd * lit)));
+      ctx.fillStyle = C.duneEdge; ctx.fillRect(X, B - 1, w, 1);
+      ctx.fillStyle = C.duneShade; ctx.fillRect(X, B - hd, w, Math.max(0, hd - 1));
+      ctx.fillStyle = C.dune; ctx.fillRect(X, B - hd, w, Math.max(1, Math.ceil(hd * lit)));
     }
     if (hs > 0) {
-      if (hd <= 0) { ctx.fillStyle = C.snowEdge; ctx.fillRect(X, B - 1, 2, 1); }
-      ctx.fillStyle = C.snowShade; ctx.fillRect(X, B - hc, 2, hs);
-      ctx.fillStyle = C.snow; ctx.fillRect(X, B - hc, 2, Math.max(1, Math.ceil(hs * (lit + 0.05))));
+      if (hd <= 0) { ctx.fillStyle = C.snowEdge; ctx.fillRect(X, B - 1, w, 1); }
+      ctx.fillStyle = C.snowShade; ctx.fillRect(X, B - hc, w, hs);
+      ctx.fillStyle = C.snow; ctx.fillRect(X, B - hc, w, Math.max(1, Math.ceil(hs * (lit + 0.05))));
     }
+    i = j;
   }
   const hl = Math.min(fs + fi > 0.5 ? SNOW.ledgeMax : SAND.ledgeMax, Math.round(h * 0.3));
   if (hl > 0) {                                     // a crest on the ledges of the top lip
@@ -3440,7 +3466,14 @@ function drawPoles() {                              // behind the haze and the s
         }
         continue;
       }
-      for (let x = Math.max(-1, xa); x <= Math.min(W, xb); x++) ctx.fillRect(x, Math.round(wireAt(sh, (x - xa) / Math.max(1, xb - xa))), 1, 1);
+      const xe = Math.min(W, xb), span = Math.max(1, xb - xa);   // each flat run of the sag as one rect
+      let rx = Math.max(-1, xa), ry = Math.round(wireAt(sh, (rx - xa) / span));
+      ctx.beginPath();                              // the whole wire one path, one fill
+      for (let x = rx + 1; x <= xe + 1; x++) {
+        const y = x <= xe ? Math.round(wireAt(sh, (x - xa) / span)) : NaN;
+        if (y !== ry) { ctx.rect(rx, ry, x - rx, 1); rx = x; ry = y; }
+      }
+      ctx.fill();
     }
     for (const [i, u, left] of perchers(k)) {
       const x = poleX(k) + WIRES[i].dx + u * POLE.gap;
@@ -3810,7 +3843,8 @@ function loop(now) {
   const fdt = Math.min(0.1, Math.abs(r - k) < 0.4 ? k * vsync : gap);
   const n = Math.max(1, Math.ceil(fdt / FIXED - 0.1)), h = fdt / n;   // (59.9 Hz: still 2 steps)
   const t0 = SHOWFPS ? performance.now() : 0;
-  if (gap > 0) for (let i = 0; i < n; i++) step(h);
+  if (gap > 0) for (let i = 0; i < n; i++) { lastSub = i === n - 1; step(h); }
+  lastSub = true;
   const t1 = SHOWFPS ? performance.now() : 0;
   draw();
   if (PROF) profTick(now);

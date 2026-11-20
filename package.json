@@ -1,0 +1,14 @@
+{
+  "name": "flappy",
+  "private": true,
+  "description": "Self-playing 8-bit Flappy demos. Tests need only Node 22+ and (for the browser parts) Chrome or Chromium.",
+  "scripts": {
+    "test": "node --test --test-reporter=spec \"tests/*.test.mjs\" \"tests/balance/*.test.mjs\"",
+    "test:quick": "node --test --test-reporter=spec \"tests/*.test.mjs\"",
+    "test:unit": "node --test --test-reporter=spec tests/unit.test.mjs",
+    "test:browser": "node --test --test-reporter=spec tests/browser.test.mjs",
+    "test:snapshots": "node --test --test-reporter=spec tests/snapshot.test.mjs",
+    "test:balance": "node --test --test-reporter=spec \"tests/balance/*.test.mjs\"",
+    "test:update": "UPDATE_SNAPSHOTS=1 node --test --test-reporter=spec tests/snapshot.test.mjs"
+  }
+}

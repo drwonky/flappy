@@ -1,0 +1,39 @@
+# Tests for flappy-seasons.html
+
+The tests need Node 22 or newer, plus Chrome or Chromium for the browser parts. There is nothing to `npm install`.
+
+```sh
+npm test              # everything (~2 min; the balance runs are most of it)
+npm run test:quick    # all but the balance runs (~30 s)
+npm run test:unit     # logic only, no browser (~20 s)
+npm run test:browser  # the page in headless Chrome
+npm run test:snapshots
+npm run test:balance
+npm run test:update   # accept the current look as the new snapshots
+```
+
+To run one test, use `node --test --test-name-pattern="abduct" tests/browser.test.mjs`.
+
+## What is covered
+
+| File | What it checks |
+|---|---|
+| `unit.test.mjs` | Logic, run in Node through `lib/sandbox.mjs` with no browser. It covers the Morse plans and timing, the ENV slider scale and labels, stats (brackets, causes of death, saving, `?resetstats`, a corrupt saved record) and frame pacing at 50/60/120/144 Hz with jitter, dropped frames, the automatic drop to 60 and `?hz`. It also checks that visual-only effects step once per frame, that quakes stay `QUAKE.calm` apart and that the pipes come back up at varied heights. The saucer must come at most once a night (and most nights), never with `?noclock`, and leave the dish behind. The same seed must give the same game. |
+| `balance/*.test.mjs` | 60 seeded autopilot games each (set `BALANCE_GAMES` for more), for the default settings, `?noclock` and `?tvs`. The average and median scores must stay in range, the bottom 10% must not crash early, and pipes must cause most deaths. Lightning, saucers and hawks each stay under a cap, and the autopilot never flies into the ground. |
+| `browser.test.mjs` | The real page in headless Chrome. Every mode and URL option (`?tv`, `?tvs`, `?tod`, `?noclock`, `?env=`, `?fps`, `?prof`, `?lowres`, `?hz`, `?daylen`, `?resetstats`, snow/sand) must load and run at phone, desktop and TV sizes with no errors and no page overflow. It also checks the canvas pixel cap on a 4K screen. It plays out each event: a crash with the stats card and restart, an abduction followed by the Morse dish, a quake, a storm with lightning, a hawk, DISCO from the button, and the ENV slider. |
+| `snapshot.test.mjs` | Twelve scenes made from a seeded random and a frozen clock, compared pixel for pixel with `snapshots/*.png`. |
+
+## When a snapshot fails
+
+A failure writes `tests/out/<scene>.actual.png` and `<scene>.diff.png`, with the changed pixels in red, then:
+
+- If the change was not meant to happen (a speed-up, a refactor), it is a bug. Fix it.
+- If it was meant (new art, a new HUD line), look at the images. If they are right, run `npm run test:update` and commit the new PNGs.
+
+The reference images come from Chrome's software renderer. A Chrome upgrade can shift a few pixels, which means re-accepting them once.
+
+## Writing a test
+
+`loadGame({ search, seed, storage, screen })` runs the game's script in Node. Its `ev(code)` evaluates `code` inside the game's own scope, so it can read any variable (`ev("stats.runs")`), call any function (`ev("die(birdX, bird.y, 'pipe')")`) or wrap one (`ev("startQuake = wrap(startQuake)")`). The game's internal calls see the wrapped version. `run(seconds)` steps the game at 1/120 s.
+
+`lib/chrome.mjs` drives headless Chrome with a throwaway profile. `page.ev()` evaluates in the page, and `page.errors` collects any exceptions.

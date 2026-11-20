@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r33</div>
+<div id="hud">seasons r34</div>
 
 <script>
 "use strict";
@@ -3785,7 +3785,6 @@ windIn.addEventListener("keydown", e => {         // 1000 fine steps are for dra
   changeWind(sliderToWind(+windIn.value));
 });
 reset();
-let last = performance.now(), vsync = 1 / 60;
 /* FRAME PACING - every frame moves the world by exactly the time it is on screen.
    The display's refresh interval is learned from the frame times, and each frame's
    time is snapped to a whole number of refreshes (rAF timestamps jitter by a ms or
@@ -3798,7 +3797,38 @@ let last = performance.now(), vsync = 1 / 60;
    than 1 frame in 12 misses at over 90 Hz, it draws on every other refresh from then
    on. ?hz=60 (or 30...) sets the rate outright. */
 const HZCAP = qnum("hz") > 0 ? qnum("hz") : 0;
-let every = 1, pace = { t0: 0, n: 0, miss: 0 };
+function makePacer(start, hzcap) { return { last: start, lastRaw: start, vsync: 1 / 60, every: 1, hzcap: hzcap || 0, hist: [], pace: { t0: 0, n: 0, miss: 0 } }; }
+/* One rAF callback at time `now` (ms): null if this refresh is sat out, else how far the
+   frame moves the world - n equal sub-steps of h s (gap: the real time since the last
+   frame, k: how many refreshes it spanned). Pure apart from the pacer it is given. */
+function paceFrame(P, now) {
+  /* the display's refresh, learned from every callback: a slow average of the intervals
+     (their median, so missed frames and jittery stamps don't drag it), and a fresh start whenever that median
+     disagrees with it by a quarter (a different display) */
+  const raw = Math.max(0, now - P.lastRaw) / 1000, rr = raw / P.vsync;
+  P.lastRaw = now;
+  if (raw > 0.002) { P.hist.push(raw); if (P.hist.length > 9) P.hist.shift(); }
+  const med = P.hist.length >= 5 ? P.hist.slice().sort((a, b) => a - b)[P.hist.length >> 1] : 0;
+  if (med && Math.abs(med / P.vsync - 1) > 0.25) P.vsync = med;
+  else if (med) P.vsync += (med - P.vsync) * 0.05;
+  else if (rr > 0.7 && rr < 1.3) P.vsync += (raw - P.vsync) * 0.05;
+  if (P.hzcap) P.every = Math.max(1, Math.round(1 / P.vsync / P.hzcap));
+  if (P.every > 1 && now - P.last < (P.every - 0.5) * P.vsync * 1000) return null;   // a refresh we sit out
+  const gap = Math.max(0, now - P.last) / 1000;   // (the first frame's stamp can be from before the page started)
+  P.last = now;
+  const r = gap / P.vsync, k = Math.max(1, Math.round(r));
+  if (P.every === 1 && !P.hzcap && gap > 0) {         // keeping up with a fast display?
+    const q = P.pace; q.n++; if (k >= 2) q.miss++;
+    if (now - q.t0 > 2000) {
+      if (P.vsync < 1 / 90 && q.n > 30 && q.miss / q.n > 1 / 12) P.every = 2;
+      P.pace = { t0: now, n: 0, miss: 0 };
+    }
+  }
+  const fdt = Math.min(0.1, Math.abs(r - k) < 0.4 ? k * P.vsync : gap);
+  const n = Math.max(1, Math.ceil(fdt / FIXED - 0.1));   // (59.9 Hz: still 2 steps)
+  return { gap, k, n: gap > 0 ? n : 0, h: fdt / n };
+}
+const pacer = makePacer(performance.now(), HZCAP);
 let perfLine = [], pf = { n: 0, t0: 0, st: 0, dr: 0, worst: 0, steps: 0, d2: 0, dd: 0 };
 /* ?prof: the parts of the game that draw() and step() call, timed on the device itself;
    the six dearest are listed on screen in ms per frame (nested calls count in both). */
@@ -3821,29 +3851,12 @@ function profTick(now) {
   for (const k in profT) profT[k] = 0;
   profF = 0; profT0 = now;
 }
-let lastRaw = last;
 function loop(now) {
-  const raw = Math.max(0, now - lastRaw) / 1000, rr = raw / vsync;   // the display's refresh, learned from every callback
-  lastRaw = now;
-  if (rr > 0.75 && rr < 1.3) vsync += (raw - vsync) * 0.05;         // one refresh: keep the estimate sharp
-  else if (rr <= 0.75 && raw > 0.003) vsync += (raw - vsync) * 0.2; // a faster display than we thought
-  if (HZCAP) every = Math.max(1, Math.round(1 / vsync / HZCAP));
-  if (every > 1 && now - last < (every - 0.5) * vsync * 1000) { requestAnimationFrame(loop); return; }   // a refresh we sit out
-  const gap = Math.max(0, now - last) / 1000;     // (the first frame's stamp can be from before the page started)
-  last = now;
-  const r = gap / vsync;
-  const k = Math.max(1, Math.round(r));
-  if (every === 1 && !HZCAP && gap > 0) {             // keeping up with a fast display?
-    pace.n++; if (k >= 2) pace.miss++;
-    if (now - pace.t0 > 2000) {
-      if (vsync < 1 / 90 && pace.n > 30 && pace.miss / pace.n > 1 / 12) every = 2;
-      pace = { t0: now, n: 0, miss: 0 };
-    }
-  }
-  const fdt = Math.min(0.1, Math.abs(r - k) < 0.4 ? k * vsync : gap);
-  const n = Math.max(1, Math.ceil(fdt / FIXED - 0.1)), h = fdt / n;   // (59.9 Hz: still 2 steps)
+  const f = paceFrame(pacer, now);
+  if (!f) { requestAnimationFrame(loop); return; }
+  const { gap, k, n, h } = f, vsync = pacer.vsync, every = pacer.every;
   const t0 = SHOWFPS ? performance.now() : 0;
-  if (gap > 0) for (let i = 0; i < n; i++) { lastSub = i === n - 1; step(h); }
+  for (let i = 0; i < n; i++) { lastSub = i === n - 1; step(h); }
   lastSub = true;
   const t1 = SHOWFPS ? performance.now() : 0;
   draw();

@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r41</div>
+<div id="hud">seasons r42</div>
 
 <script>
 "use strict";
@@ -1992,7 +1992,7 @@ function makeGL(gl, cv) {
           "else{float y0=(py-.5)/u_ds-.5,y1=(py+.5)/u_ds-.5,r0=floor((y0+y1)*.5);vec3 c0=rowc(r0,s.x),c1=rowc(r0+1.,s.x);" +
             "c=(c0*beam(c0,y0-r0,y1-r0)+c1*beam(c1,y0-r0-1.,y1-r0-1.))*u_ds;}" +
           // the mask: whole px across (the screen's own grid); its rows follow the game's rows, so it can't beat against the beams
-          "vec3 m;float x=px,per=u_ds<2.99?2.*u_ds:u_ds;" +
+          "vec3 m;float x=px,per=u_ds<2.99?2.*max(2.,floor(u_ds+.5)):u_ds;" +      // (under 3 px a row there are no beams: a whole, even period, in step with the alternate-row shade)
           "if(u_mode==4){float g=u_ds<2.99?floor(py/u_ph):floor(py*2./u_ds);x+=mod(g,2.)*1.5*u_pw;float k=mod(floor(x/u_pw),3.);" +
             "m=vec3(k<.5?1.:u_dark,k>.5&&k<1.5?1.:u_dark,k>1.5?1.:u_dark);}" +
           "else{float k=mod(floor(x/u_pw),3.);float t=floor(x/(3.*u_pw));float y=py/per+mod(t,2.)*.5;" +
@@ -2561,7 +2561,7 @@ function makeGL(gl, cv) {
     scSH = (kk >= 3 ? kk : 2 * kk) - 1;             // a slot and its 1 px gap are one logical row tall (two when a row is 2 px)
     scDark = scDS < 2.99 ? .68 : .5;                 // gentler where a phosphor is one px
     const dk = scDark, avg = (1 + 2 * dk) / 3;       // average loss of the mask, made up for with a boost
-    const per = scDS < 2.99 ? 2 * scDS : scDS;        // slot: one px of gap a row (two rows when a row is under 3 px)
+    const per = scDS < 2.99 ? 2 * Math.max(2, Math.round(scDS)) : scDS;   // slot: one px of gap a row (a whole, even period when a row is under 3 px)
     scBoost = 1 / (scanMode === 5 ? avg * (per - 1 + .35) / per : avg);
   }
   function screenDataURL(x, y, w, h) {             // a piece of what present() put on the screen canvas (x, y from the top left), for the tests; call right after draw()

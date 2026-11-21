@@ -180,7 +180,9 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
   it("draws delta and slot with no moire at a fractional scale: a flat colour stays flat", async () => {
     // a beat between the mask or the beams and the screen's pixel grid shows up as slow bands; averaged
     // over whole groups of rows (or columns) a flat field must come out the same everywhere
-    for (const [q, view] of [["?scan=delta&bloom=0", { width: 390, height: 844, dpr: 2.75, mobile: true }], ["?scan=slot&bloom=0", { width: 390, height: 844, dpr: 2.75, mobile: true }]]) {
+    // (3.4 px a game row: beams at a fractional scale; about 2.55: the beamless shade, as in a 2337 px wide Firefox window on ?tvs)
+    for (const [q, view] of [["?scan=delta&bloom=0", { width: 390, height: 844, dpr: 2.75, mobile: true }], ["?scan=slot&bloom=0", { width: 390, height: 844, dpr: 2.75, mobile: true }],
+                             ["?tvs&scan=slot&bloom=0", { width: 2337, height: 1400, dpr: 1 }], ["?tvs&scan=delta&bloom=0", { width: 2337, height: 1400, dpr: 1 }]]) {
       const p = await open(q, view, 800);
       try {
         const r = await p.ev(`new Promise(res => { window.requestAnimationFrame = () => 0; setTimeout(() => {
@@ -190,7 +192,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
           const L = (x, y) => { const i = (y * w + x) * 4; return a[i] * .299 + a[i + 1] * .587 + a[i + 2] * .114; };
           const x0 = w >> 2, x1 = x0 + (w >> 1), y0 = h >> 2, y1 = y0 + (h >> 1), rows = [];
           for (let y = y0; y < y1; y++) { let t = 0; for (let x = x0; x < x1; x++) t += L(x, y); rows.push(t / (x1 - x0)); }
-          const k = Math.round(DS * 12), env = [];
+          const k = DS < 2.99 ? 4 * Math.max(2, Math.round(DS)) : Math.round(DS * 12), env = [];   // whole periods of the pattern: 2 slot periods, or 12 beams
           for (let i = 0; i + k <= rows.length; i += 3) { let t = 0; for (let j = i; j < i + k; j++) t += rows[j]; env.push(t / k); }
           res({ lo: Math.min(...env), hi: Math.max(...env), ds: DS });
         }, 200); })`);

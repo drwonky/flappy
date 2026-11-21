@@ -42,7 +42,7 @@ const PRELOAD = `
 // [name, URL query, viewport, setup (in the page), seconds to step after it]
 const PH = { width: 600, height: 900 }, TV = { width: 1280, height: 720 };
 const TRAP_SET = "score = 5; pipes = pipes.filter(p => p.x + PIPE_W > birdX - HW); pipes[0].x = 200; pipes[0].bot = 250; pipes[0].top = 250 - gap; pipes[0].trap = makeTrap(r => 0.5); Object.assign(pipes[0].trap, { on: true, up: 1, e: 1, open: 1, age: 1 }); bird.y = 150; bird.vy = 0; cooldown = 9;";
-const SCENES = [
+const OLD_SCENES = [
   ["spring-day", "?season=0&hour=10", PH, "", 3],
   ["summer-storm", "?season=1&hour=14", PH, "die = () => {}; seasonT = stormWindow()[0] + stormWindow()[1] * 0.35; skin = 0.8; core = 0.6; until(() => ts.I > 0.9, 10); strike(1)", 0.1],   // (the bird can't die: this is about the storm)
   ["summer-sand-heaps", "?season=1&hour=11&sand=140", PH, "", 4],
@@ -65,6 +65,18 @@ const SCENES = [
   ["blimp-fire-fall", "?season=1&hour=23&blimpfire", PH, "die = () => {}; seasonT = stormWindow()[0] + stormWindow()[1] * 0.35", 6.3],   // lightning hit it at 3 s: about 3 s into the fall
   ["blimp-wreck-blaze", "?season=0&hour=23&blimpfire", PH, "die = () => {}", 12],   // down at about 8.5 s: the wreck in full blaze
   ["fireworks-finale", "?season=1&hour=19.5&fireworks", PH, "", 9],   // about 8.5 s in: the barrage
+];
+// (the older scenes are pinned with &holidays=0: Christmas and Good Friday are dates on the year's clock, and the ones that run into them
+// - winter-night-snow, tv-night, quake, quake-loop, disco, blimp-wreck-blaze - would otherwise look different, and by the year's Easter)
+const PIN = "&holidays=0";
+// Christmas and Easter: started by their flags a second in (the scene's setup is the 0.5 s in), the clock set so the sky is as it should be
+const EGGS = "run(12.3); for (let i = 0; i < 7; i++) Object.assign(eggs[i], { on: true, ex: dist + 24 + i * 38, y: SKY + 5 + (i % 3) * 2, gy: SKY + 5 + (i % 3) * 2, vx: 0, vy: 0, rest: true, nb: 2, kind: i % 3, col: i % 6 }); " +
+  "Object.assign(eggs[7], { on: true, ex: dist + 120, y: SKY - 40, gy: SKY + 7, vx: 0, vy: 0, rest: false, nb: 0, kind: 1, col: 3 }); Object.assign(eggs[8], { on: true, ex: dist + 200, y: SKY - 14, gy: SKY + 6, vx: 0, vy: -90, rest: false, nb: 1, kind: 2, col: 1 });";
+const SCENES = [
+  ...OLD_SCENES.map(([n, q, ...r]) => [n, q + PIN, ...r]),
+  ["christmas-santa", "?santa&hour=22&season=3" + PIN, PH, "die = () => {}; pipes = []; since = -1e9", 6.2],        // Santa half way across at about 5.7 s into it, the star at its brightest
+  ["easter-blood-moon", "?easter&hour=22&season=0" + PIN, PH, "", 7.1],     // about 6.6 s into Easter: the shadow most of the way over the moon
+  ["easter-sunrise", "?easter&hour=9&season=0" + PIN, PH, EGGS, 0.45],      // about 12.3 s in: gold, the bunny, lilies, eggs on the ground and two in the air
 ];
 
 // render one scene on a fresh page; returns { p, png } (the caller closes p)

@@ -177,6 +177,49 @@ Values that do not parse are ignored, and the default is used. For example `?day
   - The show is a far backdrop that drifts past slowly, behind the hills, the pipes and the bird. It is only for looking at and changes nothing in the game. By day the sparks are fainter and leave small puffs of smoke.
   - `?flair=0` turns the shows off, this flag included.
 
+### `santa`
+
+- **Syntax:** `?santa` (flag)
+- **Default:** off.
+- **What it does:** Starts the Christmas event one second after the page loads, whatever the date and the hour, for testing and for fun.
+- **Example:** `flappy-seasons.html?santa&hour=22`
+- **Interactions and caveats:**
+  - Christmas also comes on its own. The year (see `fireworks`) passes December 25 about 1.9 s into winter at the default `seasonlen`, and if it is then late evening, night or early morning (18:00 to 07:00) the event runs. By day it is skipped for that year. With `?noclock` there is no night, so only this flag starts it.
+  - One star, high up near the middle of the sky, swells far brighter than the others over about 1.5 s, with a soft glow and four long glinting rays. Santa then crosses the sky beneath it in about 9 s: a red sleigh with a sack of toys, Rudolph in the lead with a glowing red nose and eight more reindeer, trailing sparkles. The star dims back over about 2 s. The season line reads CHRISTMAS in red and green for the 12 s.
+  - Santa is a far backdrop, behind the clouds, the hills, the pipes and the bird, and the night does not dim him. It is only for looking at and changes nothing in the game.
+  - `?flair=0` turns it off, this flag included. `?holidays=0` keeps it from coming on its date, but the flag still works.
+
+### `easter`
+
+- **Syntax:** `?easter` (flag)
+- **Default:** off.
+- **What it does:** Starts the 20 s Easter event one second after the page loads, whatever the date and the hour.
+- **Example:** `flappy-seasons.html?easter&hour=22`
+- **Interactions and caveats:**
+  - Easter also comes on its own, each time the year passes Good Friday (two days before Easter Sunday, which is worked out for the current real year; see `easteryear`). It does not depend on the hour. The phases adapt:
+    - 0 to 5 s, GOOD FRIDAY: the sky and the world darken over 1.5 s (more at night), then lift.
+    - 5 to 11 s, BLOOD MOON: if the moon is up, the Earth's shadow creeps over it and it turns copper, then clears. By day or with no moon this phase is skipped and the dark simply lifts into dawn.
+    - 11 to 17 s, EASTER: a golden wash over the sky and the sun flares (at night, a golden dawn glows on the horizon). A mild tremor of 2 to 3 s shakes the screen a few pixels and raises a little dust. It is not an earthquake: nothing topples. A white bunny hops along the ground and white lilies bloom among the flowers.
+    - 17 to 20 s: it all fades back.
+  - All through the 20 s, every 1.5 to 3 s, Flappy lays a pastel egg (striped, dotted or zigzag). It drops, bounces once or twice, rolls a little and sits on the ground, scrolling away with it. At most 30 are alive at once.
+  - It is only for looking at and changes nothing in the game.
+  - `?flair=0` turns it off, this flag included. `?holidays=0` keeps it from coming on its date, but the flag still works.
+
+### `easteryear`
+
+- **Syntax:** `?easteryear=YYYY`, a whole year.
+- **Default:** the current year.
+- **What it does:** Works out Easter Sunday for that year instead (Meeus/Jones/Butcher computus; 2024 is 31 March, 2025 is 20 April, 2026 is 5 April, 2027 is 28 March), and so the day of Good Friday.
+- **Example:** `flappy-seasons.html?easteryear=2027`
+- **Interactions and caveats:** Only moves the date of the Easter event (see `easter`). Good Friday falls between 20 March and 23 April, so it is 0 to 10 s into spring at the default `seasonlen`.
+
+### `holidays`
+
+- **Syntax:** `?holidays=0`
+- **Default:** on.
+- **What it does:** Stops Christmas and Easter from coming on their dates. `?santa` and `?easter` still start them. Mainly for tests, so that a run through the year looks the same whatever the real date.
+- **Example:** `flappy-seasons.html?holidays=0`
+
 ### `blimpfire`
 
 - **Syntax:** `?blimpfire` (flag)
@@ -236,7 +279,7 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Interactions and caveats:**
   - `?flair=0` turns all of them off, including the hawk and the flying saucer. The hawk can take the bird, so `?flair=0` also removes that risk.
   - The flying saucer only appears at night, and does not appear with `?noclock`.
-  - `?flair=0` also turns off the July 4th fireworks (see `fireworks`) and the blimp disaster (see `blimpfire`).
+  - `?flair=0` also turns off the July 4th fireworks (see `fireworks`), Christmas and Easter (see `santa` and `easter`) and the blimp disaster (see `blimpfire`).
 
 ### `trap`
 

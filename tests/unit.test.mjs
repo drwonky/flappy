@@ -577,6 +577,162 @@ describe("July 4th fireworks", () => {
   });
 });
 
+describe("Christmas and Easter", () => {
+  // the events of a run, from the outside: [start, length] of the span `ex` is truthy, in game seconds
+  const spans = (search, secs, ex, seed = 3) => {
+    const g = loadGame({ search, seed }), out = []; let t0 = null;
+    g.run(secs, i => { const on = !!g.ev(ex); if (on && t0 === null) t0 = i / 120; if (!on && t0 !== null) { out.push([t0, i / 120 - t0]); t0 = null; } });
+    return { g, out };
+  };
+  const patchGradients = g => g.ev("ctx.createLinearGradient = ctx.createRadialGradient = () => ({ addColorStop() {} })");   // (the stub canvas has none: draw() needs them)
+  it("finds Easter Sunday for known years (Anonymous Gregorian computus)", () => {
+    const g = loadGame();
+    for (const [y, m, d] of [[2024, 3, 31], [2025, 4, 20], [2026, 4, 5], [2027, 3, 28], [2000, 4, 23], [2019, 4, 21], [2038, 4, 25], [1818, 3, 22]])
+      assert.deepEqual(g.ev(`easterSunday(${y})`), [m, d], `Easter ${y}`);
+  });
+  it("puts Christmas on day 359 and Good Friday two days before Easter, on the year's clock", () => {
+    const g = loadGame({ search: "?easteryear=2026" });
+    near(g.ev("XM.at * 4 * SEASON.len"), (359 - 79) / 365 * 112, 1e-6, "Christmas, s into the year");
+    near(g.ev("EA.at * 4 * SEASON.len"), (93 - 79) / 365 * 112, 1e-6, "Good Friday 2026 is 3 April, day 93");
+    near(loadGame({ search: "?easteryear=2024" }).ev("EA.at * 4 * SEASON.len"), (89 - 79) / 365 * 112, 1e-6, "Good Friday 2024 is 29 March");
+  });
+  it("has the dark hours from 18:00 to 07:00, and none with ?noclock", () => {
+    const g = loadGame();
+    for (const [h, d] of [[17.9, false], [18, true], [23.5, true], [0, true], [6.9, true], [7, false], [12, false]]) assert.equal(g.ev(`hour = ${h}; hdDark()`), d, "hour " + h);
+    assert.equal(loadGame({ search: "?noclock" }).ev("hour = 22; hdDark()"), false);
+  });
+  it("starts exactly one Christmas a year at Dec 25 in the dark hours, for about 12 s", () => {
+    const { g, out } = spans("?season=3&hour=22", 112, "xmas");
+    assert.equal(out.length, 1, JSON.stringify(out));
+    near(out[0][0], g.ev("XM.at * 4 * SEASON.len - 3 * SEASON.len"), 1 / 60, "start (about 1.9 s into winter)");
+    near(out[0][0], 1.9, 0.1, "about 1.9 s into winter");
+    near(out[0][1], 12, 0.1, "length");
+    assert.equal(g.ev("xmasN"), 1);
+    assert.equal(spans("?season=3&hour=22&daylen=112", 224, "xmas").out.length, 2, "two in two years (a day as long as the year: the same hour)");
+  });
+  it("has no Christmas by day, with ?noclock or with ?flair=0, and decides by the hour it passes Dec 25", () => {
+    assert.equal(spans("?season=3&hour=12", 112, "xmas").out.length, 0);
+    assert.equal(spans("?season=3&hour=22&noclock", 112, "xmas").out.length, 0);
+    const a = spans("?season=3&hour=22&flair=0", 112, "xmas"); assert.equal(a.out.length, 0); assert.equal(a.g.ev("xmasN"), 0);
+    assert.equal(spans("?season=3&hour=22&santa&flair=0", 5, "xmas").out.length, 0);
+    const g = loadGame({ search: "?season=3&hour=17.9" });                   // the crossing itself decides: 17.9 no, 18 yes
+    g.ev("seasonT = XM.at * 4 * SEASON.len - 0.01; hdPrev = seasonT / (4 * SEASON.len); stepSeason(0.02); stepHolidays(0.02, 0)");
+    assert.equal(g.ev("xmasN"), 0);
+    g.ev("hour = 18; seasonT = XM.at * 4 * SEASON.len - 0.01; hdPrev = seasonT / (4 * SEASON.len); stepSeason(0.02); stepHolidays(0.02, 0)");
+    assert.equal(g.ev("xmasN"), 1);
+  });
+  it("is not fooled by the wrap, a big step or a change of pace (DISCO)", () => {
+    const g = loadGame({ search: "?season=3&hour=22" });
+    g.ev("seasonT = 4 * SEASON.len - 0.001; hdPrev = seasonT / (4 * SEASON.len); stepSeason(0.01); stepHolidays(0.01, 0)");   // through the wrap, past nothing
+    assert.equal(g.ev("xmasN"), 0); assert.equal(g.ev("easterN"), 0);
+    g.ev("seasonT = XM.at * 4 * SEASON.len - 0.5; hdPrev = seasonT / (4 * SEASON.len); stepSeason(2); stepHolidays(2, 0)");   // one step right over it
+    assert.equal(g.ev("xmasN"), 1);
+    g.ev("xmas = null; stepSeason(1); stepHolidays(1, 0)");
+    assert.equal(g.ev("xmasN"), 1);
+    g.ev("startDisco(); stepHolidays(0.01, 0)");                              // the same point in the year at another pace: nothing new
+    assert.equal(g.ev("xmasN"), 1);
+  });
+  it("swells the star, runs Santa across in 8-10 s, and dims it again", () => {
+    const g = loadGame({ search: "?santa&hour=22" }), k = [], u = [];
+    g.run(14, i => { if (i % 6 === 0) { k.push(g.ev("xmasStarK()")); u.push(g.ev("santaU()")); g.ev("drawSanta(); drawBethlehem(); drawSparkles()"); } });
+    assert.ok(k.every(v => v >= 0 && v <= 1));
+    const peak = Math.max(...k);
+    assert.equal(peak, 1); assert.equal(k[k.length - 1], 0, "back to normal");
+    const first = k.findIndex(v => v > 0), full = k.findIndex(v => v >= 1);
+    near((full - first) * 0.05, 1.5, 0.15, "swell");
+    const last = k.length - 1 - [...k].reverse().findIndex(v => v >= 1), gone = k.length - 1 - [...k].reverse().findIndex(v => v > 0);
+    near((gone - last) * 0.05, 2, 0.15, "dim");
+    const on = u.map((v, i) => [v, i]).filter(([v]) => v >= 0 && v <= 1);
+    near((on[on.length - 1][1] - on[0][1]) * 0.05, 9, 0.2, "the crossing");
+    assert.equal(g.ev("xmas"), null, "over");
+  });
+  it("starts one Christmas with ?santa a second in, by day or night", () => {
+    for (const h of [12, 22]) { const { out } = spans("?season=0&santa&hour=" + h, 20, "xmas"); assert.equal(out.length, 1); near(out[0][0], 1, 0.02, "start"); near(out[0][1], 12, 0.1, "length"); }
+  });
+  it("starts one Easter a year at Good Friday, lasting 20 s, through its phases in order (the blood moon at night)", () => {
+    const seq = (search, secs) => {
+      const g = loadGame({ search, seed: 3 }), s = []; let t0 = null, t1 = null;
+      g.run(secs, i => { const p = g.ev("easterPhase()"); if (p && s[s.length - 1] !== p) s.push(p); if (p && t0 === null) t0 = i / 120; if (!p && t0 !== null && t1 === null) t1 = i / 120; });
+      return { g, s, t0, t1 };
+    };
+    const n = seq("?season=0&hour=22&easteryear=2026", 112);
+    assert.deepEqual(n.s, ["friday", "moon", "sunrise", "fade"]);
+    near(n.t0, (93 - 79) / 365 * 112, 1 / 60, "start"); near(n.t1 - n.t0, 20, 0.5, "length");
+    assert.equal(n.g.ev("easterN"), 1);
+    const d = seq("?season=0&hour=12&easteryear=2026", 112);                   // by day there is no moon: the dark simply lifts into dawn
+    assert.deepEqual(d.s, ["friday", "dawn", "sunrise", "fade"]); near(d.t1 - d.t0, 20, 0.5, "length");
+    assert.equal(seq("?season=0&hour=22&easteryear=2026", 224).g.ev("easterN"), 2);
+    assert.equal(seq("?season=0&hour=22&easteryear=2026&flair=0", 112).g.ev("easterN"), 0);
+  });
+  it("starts one Easter with ?easter a second in; the darkness, eclipse and gold follow the phases", () => {
+    const g = loadGame({ search: "?season=0&hour=22&holidays=0&easter" }); const at = {};
+    g.run(22, i => { const t = g.ev("easter ? easter.t : -1"); for (const T of [0.5, 1.4, 4, 6, 8, 10.5, 13, 16, 18.5]) if (t >= T && !(T in at)) at[T] = g.ev("[hdDk, hdEcl, hdGold, hdTrem]"); });
+    assert.ok(at[0.5][0] < 0.3 && at[1.4][0] > 0.95, "darkens over 1.5 s");
+    assert.ok(at[4][0] > 0.9 && at[6][0] < 0.01, "lifts at the end of the phase");
+    assert.ok(at[8][1] > 0.95 && at[6][1] > 0 && at[10.5][1] < 0.3, "the eclipse comes and clears");
+    assert.ok(at[13][2] > 0.9 && at[13][1] === 0 && at[18.5][2] < at[16][2], "golden, then fades");
+    assert.ok(at[13][3] > 0 && at[16][3] === 0 && at[4][3] === 0, "the tremor is only in 12-14.5 s");
+    const by = loadGame({ search: "?season=0&hour=12&holidays=0&easter" }); let ecl = 0;
+    by.run(16, () => { ecl = Math.max(ecl, by.ev("hdEcl")); }); assert.equal(ecl, 0, "no eclipse without a moon");
+  });
+  it("shakes a little in the tremor, but is no quake: no startQuake, the pipes as they were, no Math.random", () => {
+    const play = search => {
+      const g = loadGame({ search, seed: 8 }); let q = 0, trem = 0; patchGradients(g); g.ev("startQuake = (f => (...a) => { globalThis.__q++; return f(...a); })(startQuake)"); globalThis.__q = 0;
+      g.ev("Math.random = (f => () => { globalThis.__r++; return f(); })(Math.random)"); globalThis.__r = 0;
+      g.run(24, i => { trem = Math.max(trem, g.ev("easterShake()")); if (i % 8 === 0) g.ev("draw()"); });
+      return { q: globalThis.__q, r: globalThis.__r, trem, pipes: g.ev("JSON.stringify(pipes.map(p => [Math.round(p.x), Math.round(p.top), Math.round(p.bot)]))"), quake: g.ev("quake"), fallen: g.ev("fallen.length") };
+    };
+    const a = play("?season=0&hour=22&quake=0&holidays=0"), b = play("?season=0&hour=22&quake=0&holidays=0&easter");
+    assert.equal(b.q, 0); assert.equal(b.quake, null); assert.equal(b.fallen, 0);
+    assert.ok(b.trem > 0.5 && b.trem <= 2, `tremor ${b.trem} px`); assert.equal(a.trem, 0);
+    assert.equal(b.pipes, a.pipes, "the pipes are the same");
+    assert.equal(b.r, a.r, "the game's Math.random is not touched");
+    delete globalThis.__q; delete globalThis.__r;
+  });
+  it("lays eggs at random gaps of 1.5-3 s, under the cap, that drop, bounce, roll and sit on the ground", () => {
+    const g = loadGame({ search: "?season=0&hour=12&holidays=0&easter", seed: 4 }), times = [];
+    g.ev("spawnEgg = (f => () => { globalThis.__e(); return f(); })(spawnEgg)");
+    globalThis.__e = () => times.push(g.ev("easter.t"));
+    let peak = 0, bounced = 0, sat = 0, first = null;
+    g.run(23, i => {
+      peak = Math.max(peak, g.ev("eggs.filter(e => e.on).length"));
+      for (const e of g.ev("eggs.filter(e => e.on).map(e => [e.nb, e.rest, e.y, e.gy])")) { if (e[0] >= 1) bounced++; if (e[1]) { sat++; assert.ok(Math.abs(e[2] - e[3]) < 1e-6, "sits on the ground"); } }
+    });
+    delete globalThis.__e;
+    assert.ok(times.length >= 6 && times.length <= 14, `${times.length} eggs in 20 s`);
+    for (let i = 1; i < times.length; i++) { const d = times[i] - times[i - 1]; assert.ok(d >= 1.5 - 0.02 && d <= 3 + 0.02, `gap ${d}`); }
+    assert.ok(times[0] >= 1.5 - 0.02 && times[0] <= 3 + 0.02, "the first gap");
+    assert.ok(times[times.length - 1] <= 20, "none after the event");
+    assert.ok(peak <= 30 && peak >= 1, `peak ${peak}`); assert.ok(bounced > 0 && sat > 0, "they bounce and then sit");
+    const h = loadGame({ search: "?season=0&hour=12" });                      // the cap, hammered
+    for (let i = 0; i < 100; i++) h.ev("spawnEgg()");
+    assert.equal(h.ev("eggs.filter(e => e.on).length"), 30);
+    h.run(0.1); assert.ok(h.ev("eggs.filter(e => e.on).length") <= 30);
+  });
+  it("draws every part of both events without error, in the dark, by day and with ?noclock", () => {
+    for (const q of ["?santa&easter&hour=22", "?santa&easter&hour=12&season=3", "?santa&easter&noclock", "?santa&easter&hour=6.5&tvs"]) {
+      const g = loadGame({ search: q, seed: 5, screen: q.includes("tvs") ? [1920, 1080] : [288, 512] }); patchGradients(g);
+      g.run(24, i => { if (i % 6 === 0) g.ev("draw()"); });
+      assert.equal(g.ev("xmasN"), 1); assert.equal(g.ev("easterN"), 1);
+    }
+  });
+  it("never changes the game: the same seed plays the same with and without ?santa and ?easter", () => {
+    const play = search => {
+      const g = loadGame({ search, seed: 21 }), s = [];
+      g.run(26, i => { if (i % 240 === 0) s.push(g.ev("[score, bird.y, stats.runs, dead, pipes.length]").join(",")); });
+      return { s: s.join("|"), x: g.ev("xmasN"), e: g.ev("easterN") };
+    };
+    const a = play("?season=0&hour=22&holidays=0"), b = play("?season=0&hour=22&holidays=0&santa&easter");
+    assert.equal(a.x + a.e, 0); assert.equal(b.x, 1); assert.equal(b.e, 1);
+    assert.equal(a.s, b.s);
+  });
+  it("turns both off with ?flair=0", () => {
+    const g = loadGame({ search: "?season=0&hour=22&santa&easter&flair=0" });
+    g.run(25, i => { if (i % 12 === 0) g.ev("draw()"); });
+    assert.equal(g.ev("xmasN"), 0); assert.equal(g.ev("easterN"), 0); assert.equal(g.ev("eggN"), 0);
+  });
+});
+
 describe("TV sizing", () => {
   // the world's height is picked so a common screen is a whole number of px per game px: every game px
   // is then a whole block of screen px, and the scanline styles have nothing fractional to beat against

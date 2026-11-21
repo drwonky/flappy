@@ -36,6 +36,9 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     ["?daylen=30&hour=17", PHONE], ["?season=3&snow=200&hour=23", PHONE], ["?season=1&sand=200", PHONE],
     ["?resetstats", PHONE], ["?tvs&tod&fps", TVSIZE],
     ["?fireworks", PHONE], ["?fireworks&tvs&hour=21", TVSIZE], ["?fireworks&2d&season=1", PHONE], ["?fireworks&scan=delta&hour=22", TVSIZE],
+    ["?santa&hour=22", PHONE], ["?santa&hour=22", TVSIZE], ["?santa&tvs&hour=21", TVSIZE], ["?santa&2d&season=3&hour=23", PHONE], ["?santa&scan=delta&hour=22", TVSIZE],
+    ["?easter&hour=22", PHONE], ["?easter&hour=22", TVSIZE], ["?easter&tvs&hour=12", TVSIZE], ["?easter&2d&season=0&hour=22", PHONE], ["?easter&scan=slot&hour=22", TVSIZE],
+    ["?santa&easter&hour=22&noclock", PHONE],
     ["?blimpfire", PHONE], ["?blimpfire&tvs&hour=22", TVSIZE], ["?blimpfire&2d&season=1&hour=23", PHONE], ["?blimpfire&scan=delta&hour=21", TVSIZE],
     ["?2d", PHONE], ["?2d", DESKTOP], ["?scan=soft", TVSIZE], ["?scan=grille", TVSIZE], ["?scan=off", TVSIZE], ["?2d&scan=off", PHONE],
     ["?scan=delta", TVSIZE], ["?scan=slot", TVSIZE], ["?scan=delta", PHONE], ["?scan=slot", PHONE], ["?scan=delta&bloom=0", PHONE],
@@ -252,6 +255,45 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
       for (let i = 0; i < 300 && !over; i++) { await p.sleep(100); over = await p.ev("!fireworks"); }
       assert.ok(over, "the show never ended");
       assert.ok((await p.ev("airClock")) - t0 <= 12, "it ran too long");
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+  it("runs Santa across the sky with ?santa: the star swells, Santa crosses in about 9 s, and it all ends", async () => {
+    const p = await open("?santa&hour=22", PHONE, 500);
+    try {
+      let on = false, t0 = 0, sawStar = 0, sawSanta = false;
+      for (let i = 0; i < 100 && !on; i++) { await p.sleep(100); on = await p.ev("!!xmas"); }
+      assert.ok(on, "no Christmas started");
+      t0 = await p.ev("airClock");
+      let over = false;   // game time: poll the event's own clock
+      for (let i = 0; i < 300 && !over; i++) {
+        await p.sleep(100);
+        const s = await p.ev("[!!xmas, xmasStarK(), santaU()]");
+        if (!s[0]) over = true; else { sawStar = Math.max(sawStar, s[1]); sawSanta = sawSanta || (s[2] > 0.1 && s[2] < 0.9); }
+      }
+      assert.ok(over, "Christmas never ended"); assert.equal(sawStar, 1); assert.ok(sawSanta, "Santa never crossed");
+      assert.ok((await p.ev("airClock")) - t0 <= 13, "it ran too long");
+      assert.equal(await p.ev("dead"), false); assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+  it("goes through Easter's phases in the real page with ?easter: Good Friday, the blood moon, sunrise, fade, 20 s in all", async () => {
+    const p = await open("?easter&hour=22&season=0&holidays=0", PHONE, 500);
+    try {
+      const seen = []; let t0 = null, tremor = 0, eggs = 0;
+      for (let i = 0; i < 450; i++) {     // polled on the event's own clock (easter.t), not wall time
+        const s = await p.ev("[easterPhase(), easter ? easter.t : -1, hdTrem, eggN, airClock]");
+        if (s[0] && seen[seen.length - 1] !== s[0]) seen.push(s[0]);
+        if (s[0] && t0 === null) t0 = s[4];
+        tremor = Math.max(tremor, s[2]); eggs = Math.max(eggs, s[3]);
+        if (!s[0] && t0 !== null) break;
+        await p.sleep(100);
+      }
+      assert.deepEqual(seen, ["friday", "moon", "sunrise", "fade"]);
+      assert.ok(tremor > 0 && tremor <= 2, "the tremor was a few px at most"); assert.ok(eggs > 0, "no egg was laid");
+      assert.equal(await p.ev("quake"), null, "it is no quake");
+      assert.ok((await p.ev("airClock")) - t0 <= 22, "it ran too long");
       assert.deepEqual(p.errors, []);
     } finally { await p.close(); }
   });

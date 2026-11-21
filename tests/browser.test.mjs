@@ -36,6 +36,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     ["?daylen=30&hour=17", PHONE], ["?season=3&snow=200&hour=23", PHONE], ["?season=1&sand=200", PHONE],
     ["?resetstats", PHONE], ["?tvs&tod&fps", TVSIZE],
     ["?2d", PHONE], ["?2d", DESKTOP], ["?scan=soft", TVSIZE], ["?scan=grille", TVSIZE], ["?scan=off", TVSIZE], ["?2d&scan=off", PHONE],
+    ["?shadow=dither", TVSIZE], ["?shadow=smooth", TVSIZE], ["?shadow=blocky", TVSIZE], ["?shadow=off", TVSIZE], ["?2d&shadow=smooth", PHONE],
   ];
   for (const [search, view] of VARIANTS) {
     it(`loads and runs: ${search || "(no options)"} at ${view.width}x${view.height}`, async () => {
@@ -101,9 +102,18 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
       await p.sleep(1000);
       assert.equal(await p.ev("RENDERER"), "2D");
       assert.equal(await p.ev("GLR"), null);
+      assert.equal(await p.ev("SHADOW_STYLE"), "classic", "the soft shadows need GL");
       assert.ok((await p.ev(shown)).game, "#game is not shown after the fallback");
       await healthy(p, "after context loss");
     } finally { await p.close(); }
+  });
+
+  it("takes the shadow style from ?shadow=, and 2D only has classic and off", async () => {
+    for (const [q, want] of [["", "dither"], ["?shadow=smooth", "smooth"], ["?shadow=blocky", "blocky"], ["?shadow=classic", "classic"], ["?shadow=off", "off"],
+                             ["?2d", "classic"], ["?2d&shadow=smooth", "classic"], ["?2d&shadow=off", "off"]]) {
+      const p = await open(q, DESKTOP, 500);
+      try { assert.equal(await p.ev("SHADOW_STYLE"), want, q || "default"); } finally { await p.close(); }
+    }
   });
 
   it("takes the scanline style from ?scan=", async () => {

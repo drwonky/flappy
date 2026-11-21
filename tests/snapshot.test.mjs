@@ -12,7 +12,9 @@
 //
 // The references are the Canvas 2D look (every scene loads with &2d). A second block,
 // "GL matches 2D", renders each scene in WebGL and in 2D and compares the two with a
-// tolerance, since GL's filtering and rounding are never bit-identical.
+// tolerance, since GL's filtering and rounding are never bit-identical (the GL side uses
+// &shadow=classic). A third block, "GL shadow styles", compares the soft shadow styles with
+// tests/snapshots/gl-<scene>-<style>.png (UPDATE_SNAPSHOTS=1 creates them).
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -129,7 +131,7 @@ describe("GL matches 2D", { skip: chromeBin ? false : "no Chrome installed", con
 
   for (const [name, search, view, setup, secs] of SCENES) {
     it(name, async t => {
-      const gl = await render(browser, search, view, setup, secs);
+      const gl = await render(browser, search + "&shadow=classic", view, setup, secs);   // (the new shadow styles have no 2D twin)
       let two;
       try {
         const r = await gl.p.ev("typeof RENDERER === 'undefined' ? null : RENDERER");
@@ -148,6 +150,48 @@ describe("GL matches 2D", { skip: chromeBin ? false : "no Chrome installed", con
         assert.ok(pct <= lim, `${name}: ${pct.toFixed(2)}% of pixels differ by more than ${TOL_CH} (limit ${lim}%) - see tests/out/${name}.gldiff.png`);
         if (process.env.GL_DIFF_LOG) console.log(`GLDIFF ${name} ${pct.toFixed(3)}%`);
       } finally { await gl.p.close(); await two?.p.close(); }
+    });
+  }
+});
+
+// the soft shadow styles (GL only): references of their own, a small tolerance since SwiftShader
+// is deterministic on one machine but not necessarily across versions
+const STYLE_SCENES = [
+  ["summer-long", "?season=1&hour=8", PH, "", 3],
+  ["tv-afternoon", "?tvs&season=1&hour=16", TV, "", 3],
+];
+const STYLES = ["dither", "smooth", "blocky", "off"];
+describe("GL shadow styles", { skip: chromeBin ? false : "no Chrome installed", concurrency: 4 }, () => {
+  let browser;
+  before(async () => { browser = await launch(); fs.mkdirSync(SNAP, { recursive: true }); });
+  after(async () => { await browser?.close(); });
+
+  for (const [scene, search, view, setup, secs] of STYLE_SCENES) {
+    const shots = {};
+    for (const style of STYLES) {
+      it(`${scene} ${style}`, async t => {
+        const name = `gl-${scene}-${style}`, r = await render(browser, search + "&shadow=" + style, view, setup, secs);
+        try {
+          if (await r.p.ev("RENDERER") !== "GL") { t.skip("WebGL unavailable here"); return; }
+          assert.equal(await r.p.ev("SHADOW_STYLE"), style);
+          shots[style] = r.png;
+          const file = path.join(SNAP, name + ".png"), actual = bytes(r.png);
+          if (UPDATE || !fs.existsSync(file)) { fs.writeFileSync(file, actual); return; }
+          const d = await compare(r.p, r.png, dataUrl(fs.readFileSync(file)), TOL_CH);
+          if (d.size) assert.fail(`${name}: size changed from ${d.size[2]}x${d.size[3]} to ${d.size[0]}x${d.size[1]}`);
+          const pct = 100 * d.n / d.total;
+          if (pct > TOL_PCT) { writeOut(name + ".actual.png", actual); writeOut(name + ".diff.png", bytes(d.diff)); }
+          assert.ok(pct <= TOL_PCT, `${name}: ${pct.toFixed(2)}% of pixels differ by more than ${TOL_CH} (limit ${TOL_PCT}%) - see tests/out/${name}.diff.png (UPDATE_SNAPSHOTS=1 to accept)`);
+        } finally { await r.p.close(); }
+      });
+    }
+    it(`${scene}: shadows actually draw (off differs from dither)`, async t => {
+      const [a, b] = await Promise.all([render(browser, search + "&shadow=off", view, setup, secs), render(browser, search + "&shadow=dither", view, setup, secs)]);
+      try {
+        if (await a.p.ev("RENDERER") !== "GL") { t.skip("WebGL unavailable here"); return; }
+        const d = await compare(a.p, a.png, b.png, 0);
+        assert.ok(d.n > 200, `${scene}: dither differs from off in only ${d.n} pixels`);
+      } finally { await a.p.close(); await b.p.close(); }
     });
   }
 });

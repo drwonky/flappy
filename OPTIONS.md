@@ -215,6 +215,17 @@ Values that do not parse are ignored, and the default is used. For example `?day
   - `?flair=0` turns all of them off, including the hawk and the flying saucer. The hawk can take the bird, so `?flair=0` also removes that risk.
   - The flying saucer only appears at night, and does not appear with `?noclock`.
 
+### `trap`
+
+- **Syntax:** `?trap=N`, a number greater than or equal to 0.
+- **Default:** `1`.
+- **What it does:** Sets how many pipes have a flytrap in them. A flytrap is a plant that rises out of a lower pipe as it comes on, with its jaws open. If the bird dips into reach it snaps shut on it, and the bird is chewed and dragged down into the pipe ("CHOMPED"). The autopilot sees an open one and flaps early to stay clear, so most are passed safely. `?trap=3` is three times as many.
+- **Example:** `flappy-seasons.html?trap=0`
+- **Interactions and caveats:**
+  - `?trap=0` turns the flytraps off altogether. `?flair=0` turns them off too.
+  - There are none in a quake or in the first pipes of a run, none while a hawk, the saucer or lightning is about, and fewer in winter, when the plant is sluggish in the cold.
+  - A flytrap that has the bird counts under FLYTRAP on the stats card.
+
 ### `quake`
 
 - **Syntax:** `?quake=N`, a number greater than or equal to 0.

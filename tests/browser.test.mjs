@@ -210,6 +210,33 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     } finally { await p.close(); }
   });
 
+  it("is chomped by a flytrap, shows the card and starts again; ?trap=0 grows none", async () => {
+    const p = await open("?season=0&hour=12");
+    try {
+      await p.ev(`(() => { score = 5; pipes = pipes.filter(q => q.x + PIPE_W > birdX - HW); const q = pipes[0]; q.trap = makeTrap(); Object.assign(q.trap, { on: true, up: 1, e: 1, open: 1 });
+        q.x = birdX - PIPE_W / 2 + 8; bird.y = q.bot - 20; bird.vy = 0; cooldown = 9; return 1; })()`);
+      let card = false;
+      for (let i = 0; i < 60 && !card; i++) { await p.sleep(100); card = await p.ev("dead && offT > 0"); }
+      assert.ok(card, "the plant never took the bird");
+      assert.equal(await p.ev("lastKind"), "trap");
+      assert.equal(await p.ev("!!trapped"), true);
+      assert.equal(await p.ev("stats.d.trap"), 1);
+      let back = false;
+      for (let i = 0; i < 90 && !back; i++) { await p.sleep(100); back = await p.ev("!dead"); }
+      assert.ok(back, "it never restarted");
+      assert.equal(await p.ev("trapped"), null);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+    for (const [q, want] of [["?trap=0", false], ["?trap=5", true]]) {
+      const b = await open(q);
+      try {
+        const got = await b.ev("TRAP.rate = 1000; score = 5; let n = 0; for (let i = 0; i < 30; i++) { spawn(); if (pipes[pipes.length - 1].trap) n++; } n > 0");
+        assert.equal(got, want, q);
+        assert.deepEqual(b.errors, []);
+      } finally { await b.close(); }
+    }
+  });
+
   it("gets through a quake, a thunderstorm, a hawk and lightning", async () => {
     const p = await open("?season=1");
     try {
@@ -229,11 +256,14 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     const p = await open("?season=1&flair=0");
     try {
       await p.ev("startQuake(); 0");
-      await p.sleep(4500);                           // the rumble, the dust settling, and then it flies its own way
+      // game time, not wall time: on a busy machine the game clock lags the real one
+      let st = false;
+      for (let i = 0; i < 150 && !st; i++) { await p.sleep(100); st = await p.ev("!!stunt || (!!quake && quake.t > QUAKE.rumble + 8)"); }
       assert.ok(await p.ev("!!quake && quake.fell"), "no quake");
-      assert.ok(await p.ev("!!stunt"), "not in stunt mode 4 s into the free pass");
+      assert.ok(await p.ev("!!stunt"), "not in stunt mode in the free pass");
       assert.equal(await p.ev("dead"), false);
-      await p.sleep(7000);                           // a loop comes within a soar or two
+      const t0 = await p.ev("quake.t");
+      for (let i = 0; i < 150 && (await p.ev("quake ? quake.t : 99")) < t0 + 6; i++) await p.sleep(100);   // a loop comes within a soar or two
       assert.equal(await p.ev("dead"), false);
       assert.deepEqual(p.errors, []);
     } finally { await p.close(); }

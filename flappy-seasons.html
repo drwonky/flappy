@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r38</div>
+<div id="hud">seasons r39</div>
 
 <script>
 "use strict";
@@ -746,7 +746,7 @@ function reset() {
   airU = 0; gustE = 0; aBird = 0; aFelt = 0; birdX = BIRD_X; homeX = BIRD_X; flyT = 0; stageN = 1; stageT = 9; curSince = 0; curNext = 300;
   skin = 0; core = 0; shade = 0; shadeK = 0; rime = 0; glaze = 0; flaps = 0; sweat = []; trail = []; sparks = []; heatFx();
   dish = abducted ? makeDish() : null; waves = [];   // they left something in it
-  struck = false; grabbed = false; abducted = false;
+  struck = false; grabbed = false; abducted = false; trapped = null;
   quake = null; quakeK = 0; fallen = []; cracks = []; rocks = [];
   clearStunt(); stEa = 0; stSpk = [];
   ramp(0); gspd = speed;
@@ -758,6 +758,7 @@ function spawn(x = W + REACH + (STAGE ? homeX - BIRD_X : 0)) {   // as far ahead
   pipes.push({ x: x, top: top, bot: top + gap, passed: false,
                sf: 0.85 + Math.random() * 0.3,          // this pipe's share of the sand
                cut: new Float32Array(SAND_COLS) });      // where the bird has plowed through its heap
+  trapSpawn(pipes[pipes.length - 1], x);
   aimOff = (Math.random() * 2 - 1) * usable() * WOBBLE_FRAC;
   const cx = x + PIPE_W / 2 + speed * spaceSec / 2;                  // half way to the next pipe
   if (SFX.desert > 0.5) spawnCactus(cx);                             // in the desert season
@@ -774,11 +775,14 @@ function wantFlap(n) {
   // for shade: the apex rule below keeps the bird in the upper part of every gap,
   // which is the side the top pipe shades - tested, aiming for shade changed nothing.)
   const target = (n.top + n.bot) / 2 + aimOff - aFelt * 0.02;
-  // a hot bird falls harder and climbs less per flap: look further ahead
-  if ((bird.y - target) + K * (gEff / GRAVITY) * (FLAP / flapEff) * bird.vy <= 0) return false;
   // the flap's apex under the gravity the bird actually feels right now
   const apex = bird.y - (flapEff * flapEff) / (2 * Math.max(GRAVITY * 0.3, gEff + aFelt));
-  return apex >= n.top + HH + usable() * MARGIN_FRAC;
+  const room = apex >= n.top + HH + usable() * MARGIN_FRAC;
+  const tz = trapDodge(n);                       // an open flytrap below: don't sink toward it, flap early
+  if (tz && bird.y + HH + 0.12 * bird.vy > tz) return room;
+  // a hot bird falls harder and climbs less per flap: look further ahead
+  if ((bird.y - target) + K * (gEff / GRAVITY) * (FLAP / flapEff) * bird.vy <= 0) return false;
+  return room;
 }
 
 /* Things that are only LOOKED AT (rain, leaves and dust, smoke, the bird's smoke
@@ -892,6 +896,7 @@ function step(dt) {
     if (!p.passed && p.x + PIPE_W < birdX - HW) { p.passed = true; score++; if (score > best) best = score; }
   }
   pipes = pipes.filter(p => p.x + PIPE_W + CAP_X > -REACH);
+  stepTraps(dt); if (dead) return;   // a snap that gets the bird ends the step: no second die()
   stepQuake(dt);                   // after the pipes move: the fallen ones keep pace
   if (cosDt) { stepAir(cosDt); stepTrail(cosDt); }   // after the pipes move, so nothing is left overlapping one
 
@@ -935,11 +940,11 @@ function birdRot() { return (stunt ? stAng : baseRot()) + stEa; }      // a stun
 function die(ix, iy, kind) {
   clearStunt(); stEa = 0; stSpk = [];
   dead = true; deadT = 0; flash = 1;
-  recordRun(struck ? "zap" : grabbed ? "hawk" : abducted ? "ufo" : kind === "ground" && iy < SKY / 2 ? "ceiling" : kind || "pipe");
-  if (!struck && !grabbed && !abducted) startBoom(ix === undefined ? birdX : ix, iy === undefined ? bird.y : iy, kind || "pipe");
+  recordRun(struck ? "zap" : grabbed ? "hawk" : abducted ? "ufo" : trapped ? "trap" : kind === "ground" && iy < SKY / 2 ? "ceiling" : kind || "pipe");
+  if (!struck && !grabbed && !abducted && !trapped) startBoom(ix === undefined ? birdX : ix, iy === undefined ? bird.y : iy, kind || "pipe");
   deathRot = birdRot();
   bird.vy = 0;
-  spawnFeathers(birdX, bird.y, abducted ? 6 : struck || grabbed ? 34 : 100, abducted ? 0.4 : struck || grabbed ? 1 : 1.5);   // a crash blows it apart
+  spawnFeathers(birdX, bird.y, abducted ? 6 : trapped ? 22 : struck || grabbed ? 34 : 100, abducted ? 0.4 : trapped ? 0.7 : struck || grabbed ? 1 : 1.5);   // a crash blows it apart
   const chips = Math.round(30 * Math.min(1, rime + glaze));   // and the ice shatters off
   for (let i = 0; i < chips; i++) {
     const a = Math.random() * Math.PI * 2, v = 90 + Math.random() * 220;
@@ -954,7 +959,7 @@ function die(ix, iy, kind) {
    labels: off, low, the x1 default, up to x2, harsh, extreme) and the best ever.
    Shown after every death, under the banner, while the next run waits. ?resetstats clears them. */
 const STATS_KEY = "flappy-stats";
-const DEATHS = [["pipe", "PIPE"], ["ground", "GROUND"], ["ceiling", "CEILING"], ["zap", "LIGHTNING"], ["hawk", "HAWK"], ["ufo", "ALIENS"]];
+const DEATHS = [["pipe", "PIPE"], ["ground", "GROUND"], ["ceiling", "CEILING"], ["zap", "LIGHTNING"], ["hawk", "HAWK"], ["ufo", "ALIENS"], ["trap", "FLYTRAP"]];
 const ENV_BR = [["OFF", v => v <= 0], ["x0.1-1", v => v < 1], ["x1", v => v === 1], ["x1-2", v => v <= 2], ["x2-20", v => v < 20], ["x20", () => true]];
 function freshStats() { const d = {}; for (const [k] of DEATHS) d[k] = 0; return { runs: 0, max: 0, d, e: ENV_BR.map(() => [0, 0, 0]) }; }
 const stats = (() => {
@@ -983,10 +988,10 @@ function recordRun(kind) {                          // one run over: how it ende
 function drawStats() {                              // the card after a death, under the banner
   if (!dead || offT <= 0) return;
   const a = Math.min(1, offT / 0.25, (D_REST - offT) / 0.3);
-  const pw = 248, x0 = Math.round(W / 2 - pw / 2), y0 = 186, L = 17;
+  const pw = 248, x0 = Math.round(W / 2 - pw / 2), y0 = 186, L = 16;   // (seven causes now: rows a little closer, so the card ends where it did)
   ctx.globalAlpha = a;
-  ctx.fillStyle = "rgba(14,20,36,.72)"; ctx.fillRect(x0, y0, pw, 14 * L + 14);
-  ctx.fillStyle = "rgba(255,255,255,.25)"; ctx.fillRect(x0, y0, pw, 1); ctx.fillRect(x0, y0 + 14 * L + 13, pw, 1);
+  ctx.fillStyle = "rgba(14,20,36,.72)"; ctx.fillRect(x0, y0, pw, 15 * L + 14);
+  ctx.fillStyle = "rgba(255,255,255,.25)"; ctx.fillRect(x0, y0, pw, 1); ctx.fillRect(x0, y0 + 15 * L + 13, pw, 1);
   const W1 = "#ffffff", DIM = "#9fb0bd", HD = "#ffe9a0";
   let y = y0 + 18;
   txt("RUNS " + stats.runs, x0 + 8, y, W1, F.hud, "left");
@@ -1070,6 +1075,7 @@ function makeBolts() {
 function stepDeath(dt) {
   deadT += dt;
   if (abducted) { if (stepAbducted()) { offT += dt; if (offT > D_REST) reset(); } return; }   // up the beam
+  if (trapped) { stepTrapped(dt); return; }     // chewed, then dragged down into the pipe
   if (grabbed) {                                // carried off in the talons, struggling
     if (hawk) { birdX = hawk.x; bird.y = hawk.y + hawkHold(hawkQ(hawk)); frameIdx = ((deadT * 14) | 0) % 4; }
     else { offT += dt; if (offT > D_REST) reset(); }
@@ -3508,6 +3514,10 @@ function drawBird() {
     if (k >= 0.98) { ctx.restore(); return; }
     ctx.translate(Math.round(birdX), Math.round(bird.y));
     ctx.rotate(deadT * 3); ctx.scale(1 - 0.7 * k, 1 - 0.7 * k);
+  } else if (trapped) {                         // struggling in the jaws, and gone below the lip
+    ctx.beginPath(); ctx.rect(0, 0, W, trapped.bot); ctx.clip();
+    ctx.translate(Math.round(birdX), Math.round(bird.y));
+    ctx.rotate(0.2 * Math.sin(deadT * 26));
   } else if (grabbed) {
     ctx.translate(Math.round(birdX), Math.round(bird.y));
     ctx.rotate(0.25 * Math.sin(deadT * 22));
@@ -4162,6 +4172,120 @@ function drawHawk() {                               // in front of everything bu
   ctx.restore();
 }
 
+/* ---------- the flytrap: now and then a lower pipe has a carnivorous plant in it. As the pipe comes on it
+   rises out of the mouth (0.6 s) and sways with its jaws wide; if the bird dips into reach it SNAPS - a lunge up and
+   the jaws slam shut - and if it got the bird it chews, then drags it down into the pipe. A miss: the jaws stay shut a
+   moment, reopen, and it sinks as the pipe goes by. The autopilot sees an open one and aims higher in the gap.
+   Slow in the cold. ?trap=N scales how many (0: none; ?flair=0 too). Born on a random of its own (a hash). ---------- */
+const TRAP_MUL = qnum("trap") !== null ? Math.max(0, qnum("trap")) : 1;
+const TRAP = { rate: 0.09, cold: 0.6, from: 2, rise: 0.6, h: [5, 9], lobe: 16, wid: 9, ang: 0.64, lunge: 5, snap: 0.1, hold: 0.55,
+               hx: 24, reach: 26, catchUp: 20, dodge: 10, show: 40 };   // per pipe; share lost in winter; first pipe (score); s; hinge above the lip, px; jaw length and width; open angle; lunge px; s to close; s shut; reach sideways, up; the jaws' reach once lunged; the autopilot keeps this far above reach; rises once it is this far inside the right edge
+let trapped = null;                                 // the pipe whose plant has the bird
+const TRAPC = { stem: "#3a8228", stemH: "#62ac46", stemD: "#27561b", leaf: "#4a9a30", leafH: "#7cc455", rim: "#566a1c", olive: "#98a42c", oliveH: "#c0ca4a",
+                pink: "#dc4f74", pinkH: "#f284a0", pinkD: "#9c2f4c", tooth: "#f7f2c6", tooth2: "#cfc78c" };
+function trapSpawn(p, x) {
+  if (FLAIR_MUL <= 0 || TRAP_MUL <= 0 || score < TRAP.from || quake || dead || hawk || ufo || struck || strikes.length || ts.I > 0.3 || (STAGE && stageT < 3)) return;
+  const k = hash1(dist * 0.0731 + x * 0.19 + 7.7);
+  if (k < TRAP.rate * TRAP_MUL * (1 - TRAP.cold * SW[3])) p.trap = makeTrap(hashRnd(dist + x * 3.1));
+}
+function makeTrap(r = Math.random) {                // (tests put one on a pipe by hand)
+  const slow = 1 + 0.8 * SW[3];
+  return { h: Math.round(TRAP.h[0] + r() * (TRAP.h[1] - TRAP.h[0])), ph: r() * 6.28, leaf2: r() < 0.6, slow,
+           on: false, up: 0, e: 0, mode: "idle", mt: 0, open: 0, lunge: 0, sink: 0, sx: 0, age: 0, done: false, leaving: false };
+}
+function trapHy(p) {                                // y of the hinge
+  const t = p.trap, L = TRAP.lobe + 2;
+  return p.bot + L - (L + t.h) * t.e - t.lunge + t.sink + (t.e >= 1 ? Math.sin(t.age * 2.4 + t.ph) : 0);
+}
+function trapDodge(n) {                             // the line the bird's bottom should stay above (0: no plant to mind)
+  const t = n.trap;
+  return t && t.mode === "idle" && !t.done && !t.leaving && t.e > 0.3 ? n.bot - t.h - TRAP.reach - TRAP.dodge : 0;
+}
+function stepTraps(dt) {
+  if (quake) return;
+  for (const p of pipes) {
+    const t = p.trap; if (!t) continue;
+    const c = p.x + PIPE_W / 2;
+    if (!t.on && p.x < W - TRAP.show) t.on = true;
+    if (t.on) { t.age += dt; t.up = Math.min(1, t.up + dt / (TRAP.rise * t.slow)); t.e = smooth(t.up); }
+    if (!t.leaving && c < birdX - 34) t.leaving = true;
+    if (t.leaving) t.sink = Math.min(t.h + 24, t.sink + 40 * dt);                  // down into the pipe as it goes by
+    t.sx = t.e >= 1 ? Math.sin(t.age * 1.7 + t.ph) * 0.9 : 0;
+    const inX = Math.abs(birdX - c) < TRAP.hx;
+    if (t.mode === "idle") {
+      t.open = t.e > 0.5 ? Math.min(1, t.open + dt * 3.5 / t.slow) : 0;           // opens as it comes out
+      if (!t.done && !t.leaving && t.up >= 0.8 && !stunt && inX && bird.y + HH > trapHy(p) - TRAP.reach) { t.mode = "snap"; t.mt = 0; }
+    } else if (t.mode === "snap") {
+      t.mt += dt;
+      const u = Math.min(1, t.mt / (TRAP.snap * t.slow));
+      t.open = 1 - u * u; t.lunge = TRAP.lunge * smooth(u * 2);
+      if (u >= 1) {
+        t.open = 0;
+        if (Math.abs(birdX - c) < TRAP.hx + 2 && bird.y + HH > trapHy(p) - TRAP.catchUp && bird.y - HH < p.bot) {   // the bird is in it
+          trapped = p; t.mode = "hold"; t.mt = 0; bird.vy = 0; die(); flash = 0.3; return;
+        }
+        t.mode = "shut"; t.mt = 0;
+      }
+    } else if (t.mode === "shut") {
+      t.mt += dt; t.lunge = Math.max(0, t.lunge - 30 * dt);
+      if (t.mt > TRAP.hold) { t.mode = "idle"; t.done = true; }                     // sways on, opens again
+    }
+  }
+}
+function stepTrapped(dt) {                          // after the catch: frozen, then it chews, then it sinks with the bird
+  const p = trapped, t = p.trap;
+  t.age += dt; t.lunge = Math.max(0, t.lunge - 20 * dt);
+  birdX += (p.x + PIPE_W / 2 - birdX) * (1 - Math.exp(-dt / 0.05));
+  if (deadT > 0.85) t.sink += (30 + 330 * (deadT - 0.85)) * dt;
+  t.sx = deadT > D_FREEZE && deadT < 0.85 ? Math.round(Math.sin(deadT * 40)) : 0;   // chewing
+  bird.y = trapHy(p) - TRAP.lobe / 2; frameIdx = ((deadT * 14) | 0) % 4;
+  if (t.sink > t.h + TRAP.lobe + 14) { offT += dt; if (offT > D_REST) reset(); }
+}
+const TGW = 56, TGH = 40, TX = 28, TY = 28, TG = new Array(TGW * TGH);   // the head, rasterised: hinge at (TX, TY)
+const TRAP_LEAF = ["......G.", "..GGGGGH", "GGHHHGG.", ".GG....."];   // a leaf, pointing out to the left of the stem
+function trapTone(c, front) {                       // the plant drawn over the bird has no veil above it: tint by hand
+  if (!front || NOCLOCK) return c;
+  const a = 0.6 * (1 - dayK), n = parseInt(c.slice(1), 16);
+  const m = (v, k) => Math.round(v + (k - v) * a);
+  return "rgb(" + m(n >> 16, 8) + "," + m((n >> 8) & 255, 12) + "," + m(n & 255, 40) + ")";
+}
+function drawTrap(p, front) {
+  const t = p.trap, L = TRAP.lobe, Wd = TRAP.wid, C2 = TRAPC;
+  const cx = Math.round(p.x + PIPE_W / 2 + t.sx), hy = Math.round(trapHy(p));
+  if (hy - L - 8 >= p.bot) return;                  // all of it still under the lip
+  const open = t.open, a = TRAP.ang * open + 0.07 * open * Math.sin(t.age * 3 + t.ph);
+  if (front) { ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, p.bot); ctx.clip(); }
+  const R = (x, y, w, h, col) => { ctx.fillStyle = trapTone(col, front); ctx.fillRect(x, y, w, h); };
+  R(cx - 2, hy, 4, p.bot + 6 - hy, C2.stem); R(cx - 2, hy, 1, p.bot + 6 - hy, C2.stemH); R(cx + 1, hy, 1, p.bot + 6 - hy, C2.stemD);   // the stem
+  const leaf = (s, y) => TRAP_LEAF.forEach((row, j) => { for (let i = 0; i < 8; i++) { const ch = row[i]; if (ch !== ".") R(s < 0 ? cx - 10 + i : cx + 9 - i, y + j, 1, 1, ch === "H" ? C2.leafH : C2.leaf); } });
+  leaf(-1, hy + 3); if (t.leaf2) leaf(1, hy + 5);
+  TG.fill(null);
+  const ca = Math.cos(a), sa = Math.sin(a), pb = Math.max(0, (Wd - 2.4) * open);
+  for (let s = -1; s <= 1; s += 2) {                // two half-ovals hinged at the foot, each rimmed with teeth
+    const dx = s * sa, dy = -ca, nx = s * ca, ny = sa;
+    for (let y = -26; y < 12; y++) for (let x = -26; x < 26; x++) {
+      const X = x + 0.5, Y = y + 0.5, u = X * dx + Y * dy, v = X * nx + Y * ny;
+      if (u < 0 || u > L || v < 0) continue;
+      const m = (u - L * 0.5) / (L * 0.58), vm = Wd * Math.sqrt(Math.max(0, 1 - m * m));
+      if (v > vm) continue;
+      TG[(y + TY) * TGW + x + TX] = v > vm - 1.1 || u < 1 || u > L - 1 ? C2.rim
+        : v < pb ? (u < 4 ? C2.pinkD : v < 1.6 ? C2.pinkH : C2.pink) : (v < pb + 1.2 && pb > 0) || ((x + y) & 1) === 0 && v > vm - 3 ? C2.oliveH : C2.olive;
+    }
+    for (let i = 0, k = s < 0 ? 0 : 1; 2 + i * 1.2 < L - 1; i++, k++) {   // the teeth: pale, every other one a long spike
+      const u = 2 + i * 1.2, vv = k & 1 ? -1.7 : -0.7;
+      const x = Math.floor(u * dx + vv * nx), y = Math.floor(u * dy + vv * ny);
+      if (x >= -TX && x < TX && y >= -TY && y < TGH - TY) TG[(y + TY) * TGW + x + TX] = k & 1 ? C2.tooth : C2.tooth2;
+    }
+  }
+  for (let y = 0; y < TGH; y++) for (let x = 0; x < TGW; x++) {   // out as runs of a colour
+    const c0 = TG[y * TGW + x]; if (!c0) continue;
+    let e = x + 1; while (e < TGW && TG[y * TGW + e] === c0) e++;
+    R(cx + x - TX, hy + y - TY, e - x, 1, c0); x = e - 1;
+  }
+  R(cx - 2, hy - 1, 4, 3, C2.rim); R(cx - 1, hy, 2, 1, C2.stemH);   // the hinge
+  if (front) ctx.restore();
+}
+
 /* ---------- an earthquake, once in a long while. A rumble, then the big one: the pipes topple flat,
    the poles splay, the wires sag and snap, the ground cracks open and rocks tumble off the hills.
    For 30 s the bird has a free pass (every fallen pipe still scores); then it all stands back up. ---------- */
@@ -4172,6 +4296,7 @@ let quakeCalm = 0;                                  // s of flying before the gr
 const quakeT1 = () => QUAKE.rumble + QUAKE.down;
 function startQuake() {
   if (quake || dead) return;
+  for (const p of pipes) p.trap = null;              // the plants go down with the pipes (and stay down)
   quake = { t: 0, fell: false, rose: false, after: 0, nextAfter: 6 + Math.random() * 6, crackAt: dist };
   quakeCalm = QUAKE.calm / Math.max(1, QUAKE_MUL);  // never two close together
 }
@@ -4656,6 +4781,7 @@ function draw() {
   drawRain();
   for (const p of pipes) {
     pipePart(p.x, 0, p.top, true);
+    if (p.trap && p !== trapped) drawTrap(p, false);   // up out of the mouth: the lip is drawn over its foot
     pipePart(p.x, p.bot, SKY, false);
     pipeSand(p);
   }
@@ -4681,6 +4807,7 @@ function draw() {
   drawSweat();
   drawBoomBack();
   drawBird();
+  if (trapped) drawTrap(trapped, true);          // the jaws over the bird they hold
   drawScorch();
   drawHawk();
   drawWaves();
@@ -4727,8 +4854,8 @@ function draw() {
     ctx.fillStyle = "rgba(20,32,15,.92)";
     const by = 136;                              // up top: the stats card goes under it
     ctx.fillRect(W / 2 - 76, by - 40, 152, 80);
-    txt(struck ? "ZAPPED" : grabbed ? "SNATCHED" : abducted ? "ABDUCTED" : "CRASHED", W / 2, by - 12, "#ffffff", F.big, "center");
-    txt(struck ? "struck by lightning" : grabbed ? "taken by a hawk" : abducted ? "taken by aliens" : "score " + score, W / 2, by + 8, struck ? "#cfd8ff" : grabbed ? "#ffd27a" : abducted ? "#9fffb0" : "#9fb0bd", F.hud, "center");
+    txt(struck ? "ZAPPED" : grabbed ? "SNATCHED" : abducted ? "ABDUCTED" : trapped ? "CHOMPED" : "CRASHED", W / 2, by - 12, "#ffffff", F.big, "center");
+    txt(struck ? "struck by lightning" : grabbed ? "taken by a hawk" : abducted ? "taken by aliens" : trapped ? "caught by a flytrap" : "score " + score, W / 2, by + 8, struck ? "#cfd8ff" : grabbed ? "#ffd27a" : abducted ? "#9fffb0" : trapped ? "#c8f070" : "#9fb0bd", F.hud, "center");
     txt("restarting...", W / 2, by + 26, "#9fb0bd", F.hud, "center");
     drawStats();
   }

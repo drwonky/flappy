@@ -41,6 +41,7 @@ const PRELOAD = `
 
 // [name, URL query, viewport, setup (in the page), seconds to step after it]
 const PH = { width: 600, height: 900 }, TV = { width: 1280, height: 720 };
+const TRAP_SET = "score = 5; pipes = pipes.filter(p => p.x + PIPE_W > birdX - HW); pipes[0].x = 200; pipes[0].bot = 250; pipes[0].top = 250 - gap; pipes[0].trap = makeTrap(r => 0.5); Object.assign(pipes[0].trap, { on: true, up: 1, e: 1, open: 1, age: 1 }); bird.y = 150; bird.vy = 0; cooldown = 9;";
 const SCENES = [
   ["spring-day", "?season=0&hour=10", PH, "", 3],
   ["summer-storm", "?season=1&hour=14", PH, "die = () => {}; seasonT = stormWindow()[0] + stormWindow()[1] * 0.35; skin = 0.8; core = 0.6; until(() => ts.I > 0.9, 10); strike(1)", 0.1],   // (the bird can't die: this is about the storm)
@@ -52,6 +53,8 @@ const SCENES = [
   ["cactus-winter-lights", "?season=3&hour=22&snow=12", PH, "pipes = []; cacti = []; spawnCactus(170)", 0.05],
   ["cactus-spring-blossom", "?season=0&hour=11", PH, "pipes = []; cacti = []; spawnCactus(170)", 0.05],
   ["cactus-autumn-pumpkin", "?season=2&hour=19", PH, "pipes = []; cacti = []; spawnCactus(170); cacti[0].sd = 0.9", 0.05],
+  ["trap-open", "?season=0&hour=12", PH, TRAP_SET, 0.01],
+  ["trap-chomp", "?season=0&hour=12", PH, TRAP_SET + " pipes[0].x = birdX - PIPE_W / 2; bird.y = 232; pipes[0].trap.mode = 'snap'; until(() => dead, 1)", 0.5],   // jaws shut on the bird, the first feathers out
   ["crash-stats-card", "?season=0&hour=9", PH, "run(4); die(birdX, bird.y, 'pipe')", 2.6],
   ["abduction", "?season=2&hour=23", PH, "ufoNight = null; ufoNext = 0; UFO.abductP = 1; until(() => abducted, 40)", 0.9],
   ["dish-morse", "?season=0&hour=23", PH, "abducted = true; die(); reset()", 5],

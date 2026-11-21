@@ -385,6 +385,88 @@ describe("flying saucer", () => {
   });
 });
 
+describe("flytrap", () => {
+  // a game with a plant fully up in the next pipe, which is held right at the bird
+  const withTrap = (search = "?season=0&hour=12", seed = 9) => {
+    const g = loadGame({ search, seed });
+    g.run(1);
+    g.ev("score = 5; pipes = pipes.filter(p => p.x + PIPE_W > birdX - HW); const p = pipes[0]; p.trap = makeTrap(); Object.assign(p.trap, { on: true, up: 1, e: 1, open: 1 }); 0");
+    return g;
+  };
+  const hold = (g, y) => g.run(0.6, () => g.ev(`pipes[0].x = birdX - PIPE_W / 2; cooldown = 9; if (!dead) { bird.y = ${y}; bird.vy = 0; } 0`));
+  it("snaps at a bird in reach and kills it: the stats count a trap, and it restarts", () => {
+    const g = withTrap();
+    hold(g, "pipes[0].bot - 20");
+    assert.equal(g.ev("dead"), true);
+    assert.equal(g.ev("lastKind"), "trap");
+    assert.equal(g.ev("stats.d.trap"), 1);
+    assert.equal(g.ev("stats.runs"), 1);
+    assert.equal(g.ev("pipes[0].trap.mode"), "hold");
+    g.run(8);                                       // chewed, dragged down, the card, and the next round
+    assert.equal(g.ev("dead"), false);
+    assert.equal(g.ev("trapped"), null);
+  });
+  it("lets a bird well above it be", () => {
+    const g = withTrap();
+    hold(g, "pipes[0].bot - 80");
+    assert.equal(g.ev("dead"), false);
+    assert.equal(g.ev("pipes[0].trap.mode"), "idle");
+  });
+  it("drags the bird down into the pipe and out of sight", () => {
+    const g = withTrap();
+    hold(g, "pipes[0].bot - 20");
+    g.run(2.5);
+    assert.ok(g.ev("bird.y - HH > trapped.bot - 40") && g.ev("trapHy(trapped) > trapped.bot"), "still above the lip");
+  });
+  it("is not there with ?trap=0 or ?flair=0, over a long run, and is with ?trap=5", () => {
+    const made = (search, secs) => {
+      const g = loadGame({ search, seed: 11 });
+      let n = 0; globalThis.__t = () => n++;
+      g.ev("makeTrap = (f => (...a) => { globalThis.__t(); return f(...a); })(makeTrap)");
+      g.run(secs);
+      delete globalThis.__t;
+      return n;
+    };
+    assert.equal(made("?trap=0", 400), 0);
+    assert.equal(made("?flair=0&trap=5", 400), 0);
+    assert.ok(made("?trap=5", 400) > 0, "none even at ?trap=5");
+  });
+  it("is not born in a quake", () => {
+    const g = loadGame({ search: "?season=0&hour=12", seed: 6 });
+    let inQuake = 0, before = 0; globalThis.__t = q => { if (q) inQuake++; else before++; };
+    g.ev("TRAP.rate = 1000; makeTrap = (f => (...a) => { globalThis.__t(!!quake); return f(...a); })(makeTrap)");
+    for (let i = 0; i < 60 && !(g.ev("score") >= 3 && !g.ev("dead")); i++) g.run(1);
+    g.ev("startQuake()");
+    g.run(25);
+    delete globalThis.__t;
+    assert.ok(before > 0, "the plant never came before the quake");
+    assert.equal(inQuake, 0);
+    assert.equal(g.ev("pipes.some(p => p.trap) && !!quake"), false);
+  });
+  it("makes the autopilot aim higher for an open one, and not for one that has had its snap", () => {
+    const g = withTrap();
+    assert.ok(g.ev("trapDodge(pipes[0])") > 0);
+    g.ev("pipes[0].trap.done = true");
+    assert.equal(g.ev("trapDodge(pipes[0])"), 0);
+  });
+  it("does not snap in a quake's free pass, and a crash during a snap is one death", () => {
+    const g = withTrap();
+    g.ev("startQuake()"); hold(g, "pipes[0].bot - 20");
+    assert.equal(g.ev("stats.d.trap"), 0);
+    const h = withTrap();
+    h.ev("pipes[0].x = birdX - PIPE_W / 2; bird.y = pipes[0].bot - 20; bird.vy = 0; cooldown = 9; pipes[0].trap.mode = 'snap'; pipes[0].trap.mt = 1; bird.y = SKY - 2; 0");
+    h.run(0.05);
+    assert.equal(h.ev("stats.runs"), 1);
+  });
+  it("loads old saved stats with no trap count as zero, and the card draws", () => {
+    const g = loadGame({ storage: memoryStorage({ "flappy-stats": JSON.stringify({ runs: 7, max: 30, d: { pipe: 5, hawk: 2 }, e: [] }) }) });
+    assert.equal(g.ev("stats.d.trap"), 0);
+    assert.equal(g.ev("stats.d.pipe"), 5);
+    assert.equal(g.ev("DEATHS.some(d => d[0] === 'trap')"), true);
+    g.ev("dead = true; offT = 1; drawStats()");
+  });
+});
+
 describe("determinism", () => {
   it("plays the same game twice from the same seed", () => {
     const trace = () => { const g = loadGame({ seed: 77 }); const s = []; g.run(90, i => { if (i % 600 === 0) s.push(g.ev("[score, Math.round(bird.y), pipes.length, dead]").join(",")); }); return s.join("|"); };

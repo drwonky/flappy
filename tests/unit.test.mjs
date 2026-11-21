@@ -242,6 +242,117 @@ describe("quakes", () => {
   });
 });
 
+describe("quake stunts", () => {
+  const TAU = Math.PI * 2, wrap = a => a - TAU * Math.round(a / TAU);
+  // one seeded quake, from its start to 8 s after the last pipe has stood up again; calls each(g) every step
+  // (stops early if the bird dies, which is for the caller to judge)
+  function quakeRun(seed, each) {
+    const g = loadGame({ search: "?flair=0&season=1", seed });
+    g.run(4); g.ev("startQuake()");
+    let over = 0;
+    for (let i = 0; i < 120 * 90 && over <= 120 * 8; i++) {
+      g.run(1 / 120);
+      each(g, over / 120);
+      if (g.ev("dead")) break;
+      if (!g.ev("quake")) over++;
+    }
+    return g;
+  }
+  it("loop the bird at least once in a free pass, and never kill it from the rumble to 8 s after the rise", () => {
+    // (the autopilot flying a normal pipe, a few s after the rise, can still miss now and then - 1 game in 40 with or without
+    // stunts - so a death in the last 5 s of the window is tolerated up to twice; in the quake or just after it never)
+    let late = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      let spin = 0, prev = null;
+      const g = quakeRun(seed, (g, after) => {
+        if (g.ev("dead")) { assert.ok(after >= 3, `seed ${seed}: the bird died ${after.toFixed(1)} s after the rise (quake t ${g.ev("quake && quake.t")})`); late++; return; }
+        const [on, rot] = g.ev("[!!stunt, birdRot()]");
+        if (on) { if (prev !== null) spin += Math.abs(wrap(rot - prev)); }
+        prev = on ? rot : null;
+      });
+      assert.ok(spin >= TAU * 0.98, `seed ${seed}: turned only ${(spin / TAU).toFixed(2)} turns`);
+    }
+    assert.ok(late <= 2, `${late} of 20 died late in the window`);
+  });
+  it("keep the bird inside the safe band, and its y and angle continuous", () => {
+    for (let seed = 21; seed <= 26; seed++) {
+      let py = null, pr = null, was = false;
+      quakeRun(seed, g => {
+        const [on, y, rot, SKY] = g.ev("[!!stunt, bird.y, birdRot(), SKY]");
+        if (on) { assert.ok(y >= 36 && y <= SKY - 36, `y ${y} left the band`); }
+        if (on && was) {                              // within a stunt (the blend in and the path itself)
+          assert.ok(Math.abs(y - py) < 5, `y jumped ${y - py}`);
+          assert.ok(Math.abs(wrap(rot - pr)) < 0.25, `angle jumped ${wrap(rot - pr)}`);
+        }
+        py = y; pr = rot; was = on;
+      });
+    }
+  });
+  it("only run in their window, and are off once the quake is over", () => {
+    for (let seed = 31; seed <= 35; seed++) {
+      let seen = 0;
+      quakeRun(seed, g => {
+        const [on, q, from, end, rise] = g.ev("[!!stunt, quake ? quake.t : -1, STUNT.from, STUNT.end, quakeT1()]");
+        if (on) { seen++; assert.ok(q >= from && q <= rise - end + 0.02, `stunt at quake t=${q}`); }
+        if (q < 0) assert.equal(on, false, "stunt after the quake");
+      });
+      assert.ok(seen > 120 * 15, `seed ${seed}: only ${seen} steps of stunts`);
+    }
+  });
+  it("end with the bird level in a gap before the pipes rise, and clear on reset and on death", () => {
+    const g = loadGame({ search: "?flair=0&season=1", seed: 3 });
+    g.run(4); g.ev("startQuake()");
+    g.run(5);
+    assert.ok(g.ev("!!stunt"));
+    g.ev("die(); reset()");
+    assert.equal(g.ev("stunt"), null);
+    assert.equal(g.ev("stX"), 0);
+    g.run(4); g.ev("startQuake()"); g.run(5);
+    assert.ok(g.ev("!!stunt"));
+    g.run(g.ev("quakeT1()") - 5 - g.ev("quake.t") + 0.1);
+    assert.equal(g.ev("stunt"), null);
+    assert.ok(Math.abs(g.ev("bird.vy")) < 400);
+  });
+  it("stop for a hawk or the saucer", () => {
+    const g = loadGame({ search: "?flair=0&season=1", seed: 3 });
+    g.run(4); g.ev("startQuake()"); g.run(5);
+    assert.ok(g.ev("!!stunt"));
+    g.ev("hawk = {}"); g.run(0.05);
+    assert.equal(g.ev("stunt"), null);
+    g.ev("hawk = null; ufo = {}"); g.run(0.05);
+    assert.equal(g.ev("stunt"), null);
+  });
+});
+
+describe("cacti", () => {
+  const seen = (search, secs, seed = 4) => {
+    const g = loadGame({ search, seed });
+    const c = [];
+    globalThis.__c = x => c.push(x);
+    g.ev("spawnCactus = (f => x => { f(x); globalThis.__c(cacti[cacti.length - 1]); })(spawnCactus)");
+    g.run(secs);
+    delete globalThis.__c;
+    return c;
+  };
+  it("grow in winter too, in their winter lights", () => {
+    const c = seen("?season=3&seasonlen=99999&hour=12", 120);
+    assert.ok(c.length >= 5, `only ${c.length} cacti in two minutes of winter`);
+    assert.ok(c.every(x => x.deco === 3), "a winter cactus without lights");
+  });
+  it("wear each season's dress", () => {
+    for (const [s, d] of [[0, 0], [1, 1], [2, 2]]) {
+      const c = seen(`?season=${s}&seasonlen=99999&hour=12`, 100);
+      assert.ok(c.length >= 3, `season ${s}: ${c.length} cacti`);
+      assert.ok(c.every(x => x.deco === d), `season ${s}: wrong decoration`);
+    }
+  });
+  it("with ?flair=0 are summer only, and bare", () => {
+    for (const s of [0, 2, 3]) assert.equal(seen(`?flair=0&season=${s}&seasonlen=99999&hour=12`, 100).length, 0, `cacti in season ${s}`);
+    const c = seen("?flair=0&season=1&seasonlen=99999&hour=12", 60);
+    assert.ok(c.length >= 3 && c.every(x => x.deco === -1));
+  });
+});
+
 describe("flying saucer", () => {
   it("visits at most once a night, and most nights", () => {
     const g = loadGame({ search: "?daylen=60&hour=17", seed: 5 });

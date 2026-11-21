@@ -225,6 +225,20 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     } finally { await p.close(); }
   });
 
+  it("spends a quake's free pass on stunts", async () => {
+    const p = await open("?season=1&flair=0");
+    try {
+      await p.ev("startQuake(); 0");
+      await p.sleep(4500);                           // the rumble, the dust settling, and then it flies its own way
+      assert.ok(await p.ev("!!quake && quake.fell"), "no quake");
+      assert.ok(await p.ev("!!stunt"), "not in stunt mode 4 s into the free pass");
+      assert.equal(await p.ev("dead"), false);
+      await p.sleep(7000);                           // a loop comes within a soar or two
+      assert.equal(await p.ev("dead"), false);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
   it("runs DISCO from the button, and puts everything back after", async () => {
     const p = await open("", PHONE);
     try {

@@ -48,6 +48,10 @@ const SCENES = [
   ["autumn-dusk", "?season=2&hour=18.4", PH, "", 3],
   ["winter-night-snow", "?season=3&hour=23&snow=120", PH, "", 3],
   ["quake", "?season=0&hour=12", PH, "run(16); startQuake()", 2.5],
+  ["quake-loop", "?season=0&hour=12", PH, "run(16); startQuake(); until(() => stunt && stunt.k === 'loop' && stunt.t > stunt.dur * 0.5, 40)", 0.02],   // upside down at the top of a loop
+  ["cactus-winter-lights", "?season=3&hour=22&snow=12", PH, "pipes = []; cacti = []; spawnCactus(170)", 0.05],
+  ["cactus-spring-blossom", "?season=0&hour=11", PH, "pipes = []; cacti = []; spawnCactus(170)", 0.05],
+  ["cactus-autumn-pumpkin", "?season=2&hour=19", PH, "pipes = []; cacti = []; spawnCactus(170); cacti[0].sd = 0.9", 0.05],
   ["crash-stats-card", "?season=0&hour=9", PH, "run(4); die(birdX, bird.y, 'pipe')", 2.6],
   ["abduction", "?season=2&hour=23", PH, "ufoNight = null; ufoNext = 0; UFO.abductP = 1; until(() => abducted, 40)", 0.9],
   ["dish-morse", "?season=0&hour=23", PH, "abducted = true; die(); reset()", 5],

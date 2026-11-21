@@ -39,7 +39,7 @@ Values that do not parse are ignored, and the default is used. For example `?day
 
 - **Syntax:** `?tv` (flag)
 - **Default:** off.
-- **What it does:** Makes the world as wide as the screen, so the picture fills a 16:9 TV edge to edge. The game still has a still stage with the bird flying across it. The ENV slider, the DISCO button, and the on-page caption are hidden, and the mouse pointer is hidden.
+- **What it does:** Makes the world as wide as the screen, so the picture fills a 16:9 TV edge to edge. Its height is chosen so the screen is a whole number of pixels per game pixel: 540 on a 1080p or 4K set (exactly 2x or 4x, so 960 x 540 on 16:9), 480 on 1440p (3x). Every game pixel is then a whole block of screen pixels, which keeps the scanline styles even. Where no height between 480 and 600 divides the screen, it is 512 as on a phone. The game still has a still stage with the bird flying across it. The ENV slider, the DISCO button, and the on-page caption are hidden, and the mouse pointer is hidden.
 - **Example:** `flappy-seasons.html?tv`
 - **Interactions and caveats:**
   - The width comes from the screen's shape (or the window's, if the window is narrower), so going fullscreen does not change the layout.

@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r42</div>
+<div id="hud">seasons r43</div>
 
 <script>
 "use strict";
@@ -83,21 +83,38 @@
    nudged to 399 so the horizon lands on a scan row.
    ============================================================ */
 /* TV mode (?tv): the logical world is widened to the SCREEN's shape (not the window's,
-   so going fullscreen changes nothing), 512 tall as always: on a 16:9 set that is 910
-   wide and the picture fills it edge to edge. The controls and the caption go away. */
+   so going fullscreen changes nothing). Its height is picked so the screen is a whole
+   number of device px per game px - 540 on a 1080p or a 4K set (2x, 4x), 480 on 1440p
+   (3x) - so every game px is a whole block of screen px; 512 where nothing near fits.
+   On a 16:9 set that makes it 960 x 540, filling it edge to edge. The controls and
+   the caption go away. */
 const TVS = /[?&]tvs(=|&|$)/.test(location.search);   // ?tvs: the same, scrolling as usual, the bird held in the middle
 const TV = TVS || /[?&]tv(=|&|$)/.test(location.search);
 const STAGE = TV && !TVS;                           // ?tv: still stages the bird flies across
-function tvWidth() {
+function tvHeight() {                               // the world's height: the screen's, divided by a whole number
+  let sh = 0;
+  try { sh = screen.height * (devicePixelRatio || 1); } catch (e) {}
+  if (!(sh > 0)) try { sh = innerHeight * (devicePixelRatio || 1); } catch (e) {}
+  if (!(sh > 0)) return 512;
+  const k = Math.max(1, Math.round(sh / 512)), h = Math.round(sh / k);
+  return h >= 480 && h <= 600 && Math.abs(sh / k - h) < 1e-6 ? h : 512;
+}
+function tvWidth(h) {
   let a = 0;
   try { a = screen.width / screen.height; } catch (e) {}
   try { const b = innerWidth / innerHeight; if (!(a > b)) a = b; } catch (e) {}
-  return isFinite(a) && a > 0 ? Math.max(288, Math.min(1400, 2 * Math.round(256 * a))) : 288;
+  let w = isFinite(a) && a > 0 ? 2 * Math.round(h / 2 * a) : 288;
+  try {                                             // a whole scale: never wider than the screen holds at it
+    const d = devicePixelRatio || 1, k = screen.height * d / h;
+    if (Math.abs(k - Math.round(k)) < 1e-6 && Math.round(k) >= 1) w = Math.min(w, 2 * Math.floor(screen.width * d / Math.round(k) / 2));
+  } catch (e) {}
+  return Math.max(288, Math.min(1400, w));
 }
-const W = TV ? tvWidth() : 288, H = 512, GROUND = 113;
+const H = TV ? tvHeight() : 512, W = TV ? tvWidth(H) : 288, GROUND = 113;
 const WK = W / 288;                                 // how much more world there is across than the usual
 const reps = (n, span, gap) => TV ? Math.max(n, Math.ceil(span / gap)) : n;   // enough of a repeating thing to span a TV
 const SKY = H - GROUND;
+const PLAY = 512 - GROUND, PLAY_Y = Math.max(0, Math.round((SKY - PLAY) / 2));   // the pipes' gaps keep to the usual band, centred in a taller TV sky (so it plays the same)
 
 /* PHYSICS - per-frame values widely quoted for the original (gravity
    0.5 px/frame^2, flap -9 px/frame) converted to px/s. Unchanged from
@@ -755,7 +772,7 @@ function reset() {
 }
 
 function spawn(x = W + REACH + (STAGE ? homeX - BIRD_X : 0)) {   // as far ahead of the bird as ever (TV: the bird moves, not the world)
-  const top = 30 + Math.random() * (SKY - 60 - gap);
+  const top = PLAY_Y + 30 + Math.random() * (PLAY - 60 - gap);
   pipes.push({ x: x, top: top, bot: top + gap, passed: false,
                sf: 0.85 + Math.random() * 0.3,          // this pipe's share of the sand
                cut: new Float32Array(SAND_COLS) });      // where the bird has plowed through its heap
@@ -1993,10 +2010,13 @@ function makeGL(gl, cv) {
             "c=(c0*beam(c0,y0-r0,y1-r0)+c1*beam(c1,y0-r0-1.,y1-r0-1.))*u_ds;}" +
           // the mask: whole px across (the screen's own grid); its rows follow the game's rows, so it can't beat against the beams
           "vec3 m;float x=px,per=u_ds<2.99?2.*max(2.,floor(u_ds+.5)):u_ds;" +      // (under 3 px a row there are no beams: a whole, even period, in step with the alternate-row shade)
-          "if(u_mode==4){float g=u_ds<2.99?floor(py/u_ph):floor(py*2./u_ds);x+=mod(g,2.)*1.5*u_pw;float k=mod(floor(x/u_pw),3.);" +
+          // delta: each beam its own row of dots, every other one half a triad along (the uneven px land in the dark between beams)
+          "if(u_mode==4){float g=u_ds<2.99?floor(py/u_ph):floor(py/u_ds);x+=mod(g,2.)*1.5*u_pw;float k=mod(floor(x/u_pw),3.);" +
             "m=vec3(k<.5?1.:u_dark,k>.5&&k<1.5?1.:u_dark,k>1.5?1.:u_dark);}" +
-          "else{float k=mod(floor(x/u_pw),3.);float t=floor(x/(3.*u_pw));float y=py/per+mod(t,2.)*.5;" +
-            "m=vec3(k<.5?1.:u_dark,k>.5&&k<1.5?1.:u_dark,k>1.5?1.:u_dark);if(fract(y)*per<1.)m*=.35;}" +
+          // slot: a 1 px gap each period, shaded by how much of it this px covers (so at a fractional period it never jumps a px)
+          "else{float k=mod(floor(x/u_pw),3.);float t=floor(x/(3.*u_pw));float y=py/per+mod(t,2.)*floor(per*.5)/per,h=.5/per,g=1./per,n=floor(y+h);" +
+            "float cv=(max(0.,min(y+h,n+g)-max(y-h,n))+max(0.,min(y+h,n-1.+g)-max(y-h,n-1.)))*per;" +
+            "m=vec3(k<.5?1.:u_dark,k>.5&&k<1.5?1.:u_dark,k>1.5?1.:u_dark)*(1.-.65*clamp(cv,0.,1.));}" +
           "c=shoulder(c*m*u_boost);" +
         "}" +
         "gl_FragColor=vec4(c,1.);}",
@@ -4482,7 +4502,7 @@ function standUp() {                                // the ones clear of the bir
 function quakeSpawn() {                             // a pipe coming in while the ground is shaken flat: it is down already
   if (!quake || !quake.fell) return;
   const p = pipes.pop();
-  p.top = QUAKE.mid - GAP0 / 2 + (Math.random() * 2 - 1) * QUAKE.spread; p.bot = p.top + GAP0;  // a wide gap near the bird's line (but not all in a row), for when it stands back up
+  p.top = PLAY_Y + QUAKE.mid - GAP0 / 2 + (Math.random() * 2 - 1) * QUAKE.spread; p.bot = p.top + GAP0;  // a wide gap near the bird's line (but not all in a row), for when it stands back up
   aimOff = 0;
   const f = fallOf(p, -9); f.landed = true;
   if (quake.rose) { f.r = 0; f.rd = 0; }
@@ -4496,7 +4516,7 @@ function quakeAim() {                               // nothing standing: steer b
   let n = null;
   for (const f of fallen) if (f.p.x + PIPE_W > birdX - HW && (!quake.rose || f.r !== undefined) && (!n || f.p.x < n.x)) n = f.p;
   if (n) return n;
-  return { x: birdX + 1, top: QUAKE.mid - GAP0 / 2, bot: QUAKE.mid + GAP0 / 2 };
+  return { x: birdX + 1, top: PLAY_Y + QUAKE.mid - GAP0 / 2, bot: PLAY_Y + QUAKE.mid + GAP0 / 2 };
 }
 /* ---------- the free pass, spent on stunts: from just after the dust settles until 5 s before the pipes rise the
    bird flies a planned path instead of steering through the gaps - a long SOAR (wings held spread, climbing high and

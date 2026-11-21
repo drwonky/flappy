@@ -67,7 +67,7 @@ async function openPage(port, browserWs, { width = 390, height = 844, dpr = 1, m
   await send("Runtime.enable");
   await send("Page.enable");
   await send("Log.enable");
-  await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile });
+  await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: dpr, mobile, screenWidth: width, screenHeight: height });   // (the screen is the window, as on a TV in fullscreen)
   if (mobile) await send("Emulation.setTouchEmulationEnabled", { enabled: true });
   if (preload) await send("Page.addScriptToEvaluateOnNewDocument", { source: preload });
 

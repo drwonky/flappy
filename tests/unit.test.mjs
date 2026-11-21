@@ -576,3 +576,23 @@ describe("July 4th fireworks", () => {
     assert.equal(n, base);
   });
 });
+
+describe("TV sizing", () => {
+  // the world's height is picked so a common screen is a whole number of px per game px: every game px
+  // is then a whole block of screen px, and the scanline styles have nothing fractional to beat against
+  it("scales by a whole number on 1080p, 1440p and 4K, and keeps 512 where nothing fits", () => {
+    for (const [screen, w, h, k] of [[[3840, 2160], 960, 540, 4], [[1920, 1080], 960, 540, 2], [[2560, 1440], 852, 480, 3],
+                                     [[3440, 1440], 1146, 480, 3], [[1920, 1200], 960, 600, 2], [[1280, 720], 910, 512, null]]) {
+      const g = loadGame({ search: "?tvs", screen });
+      assert.deepEqual([g.ev("W"), g.ev("H")], [w, h], screen.join("x"));
+      if (k) assert.equal(g.ev("DS"), k, `${screen.join("x")}: ${g.ev("DS")} px a game px`);
+    }
+  });
+  it("keeps the pipes' gaps in the usual band, centred in a taller sky", () => {
+    const g = loadGame({ search: "?tvs", screen: [1920, 1080], seed: 3 });
+    assert.equal(g.ev("PLAY_Y"), 14);
+    let lo = 1e9, hi = -1e9;
+    for (let i = 0; i < 400; i++) { g.ev("spawn(); 0"); const t = g.ev("pipes[pipes.length - 1].top"), b = g.ev("pipes[pipes.length - 1].bot"); lo = Math.min(lo, t); hi = Math.max(hi, b); }
+    assert.ok(lo >= 14 + 30 - 1e-9 && hi <= 14 + 512 - 113 - 30 + 1e-9, `gaps from ${lo} to ${hi}`);
+  });
+});

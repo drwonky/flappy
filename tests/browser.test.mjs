@@ -51,7 +51,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
   it("sizes the world to the screen in the TV modes and the phone layout", async () => {
     const tv = await open("?tvs", TVSIZE), ph = await open("", PHONE);
     try {
-      assert.equal(await tv.ev("W"), 910);
+      assert.equal(await tv.ev("W"), 960); assert.equal(await tv.ev("H"), 540);   // 1080p: exactly 2 device px a game px
       assert.equal(await ph.ev("W"), 288);
     } finally { await tv.close(); await ph.close(); }
   });
@@ -274,8 +274,8 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     } finally { await p.close(); }
     for (const [q, want] of [["?trap=0", false], ["?trap=5", true]]) {
       const b = await open(q);
-      try {
-        const got = await b.ev("TRAP.rate = 1000; score = 5; let n = 0; for (let i = 0; i < 30; i++) { spawn(); if (pipes[pipes.length - 1].trap) n++; } n > 0");
+      try {   // (with what blocks a plant cleared: in the live page a hawk, the saucer, a storm or a death may be under way)
+        const got = await b.ev("TRAP.rate = 1000; score = 5; dead = false; hawk = null; ufo = null; quake = null; struck = false; strikes.length = 0; ts.I = 0; let n = 0; for (let i = 0; i < 30; i++) { spawn(); if (pipes[pipes.length - 1].trap) n++; } n > 0");
         assert.equal(got, want, q);
         assert.deepEqual(b.errors, []);
       } finally { await b.close(); }

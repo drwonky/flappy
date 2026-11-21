@@ -36,6 +36,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     ["?daylen=30&hour=17", PHONE], ["?season=3&snow=200&hour=23", PHONE], ["?season=1&sand=200", PHONE],
     ["?resetstats", PHONE], ["?tvs&tod&fps", TVSIZE],
     ["?fireworks", PHONE], ["?fireworks&tvs&hour=21", TVSIZE], ["?fireworks&2d&season=1", PHONE], ["?fireworks&scan=delta&hour=22", TVSIZE],
+    ["?blimpfire", PHONE], ["?blimpfire&tvs&hour=22", TVSIZE], ["?blimpfire&2d&season=1&hour=23", PHONE], ["?blimpfire&scan=delta&hour=21", TVSIZE],
     ["?2d", PHONE], ["?2d", DESKTOP], ["?scan=soft", TVSIZE], ["?scan=grille", TVSIZE], ["?scan=off", TVSIZE], ["?2d&scan=off", PHONE],
     ["?scan=delta", TVSIZE], ["?scan=slot", TVSIZE], ["?scan=delta", PHONE], ["?scan=slot", PHONE], ["?scan=delta&bloom=0", PHONE],
     ["?scan=lines&bloom=2", PHONE], ["?2d&scan=slot", PHONE],
@@ -251,6 +252,25 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
       for (let i = 0; i < 300 && !over; i++) { await p.sleep(100); over = await p.ev("!fireworks"); }
       assert.ok(over, "the show never ended");
       assert.ok((await p.ev("airClock")) - t0 <= 12, "it ran too long");
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+  it("burns a blimp with ?blimpfire: the fire goes through its phases in the real page, and the wreck burns on the ground", async () => {
+    const p = await open("?blimpfire&hour=22", PHONE, 500);
+    try {
+      const seen = [];   // polled on the game's own clock (blimpFire.t), not wall time
+      for (let i = 0; i < 400 && seen[seen.length - 1] !== "wreck"; i++) {
+        await p.sleep(100);
+        const ph = await p.ev("blimpFire ? blimpFire.phase : null");
+        if (ph && ph !== seen[seen.length - 1]) seen.push(ph);
+      }
+      assert.deepEqual(seen, ["fly", "burning", "falling", "wreck"]);
+      assert.equal(await p.ev("blimpFire.y + 9 < bfGround() + 1"), true, "on the ground");
+      assert.ok(await p.ev("bfN") > 10, "no flames or smoke");
+      const t = await p.ev("blimpFire.t"); await p.sleep(1500);
+      assert.ok((await p.ev("blimpFire ? blimpFire.t : 99")) > t, "the wreck is not burning on");
+      assert.ok(await p.ev("bfN") <= 500);
       assert.deepEqual(p.errors, []);
     } finally { await p.close(); }
   });

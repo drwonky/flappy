@@ -28,7 +28,7 @@ const UPDATE = !!process.env.UPDATE_SNAPSHOTS;
 // a scene fails when more than TOL_PCT percent of its pixels differ.
 // GL draws fractional and rotated edges hard where 2D smooths them (as agreed: it is pixel
 // art), so a scene full of them gets its own limit: the quake's tilted pipes and rainbow rim.
-const TOL_CH = 8, TOL_PCT = 1.0, TOL_SCENE = { quake: 4.0 };
+const TOL_CH = 8, TOL_PCT = 1.0, TOL_SCENE = { quake: 2.0 };
 
 // before the page's own script: one seeded random, a clock that only moves when
 // the test says so, and no animation loop of its own (the test steps the game)
@@ -62,6 +62,8 @@ const SCENES = [
   ["tv-night", "?tvs&season=3&hour=22", TV, "", 3],
   ["tv-day-shadows", "?tvs&season=1&hour=12", TV, "", 3],
   ["fireworks-night", "?season=1&hour=22&fireworks", PH, "", 4.5],   // the show started at 1 s: about 4 s in
+  ["blimp-fire-fall", "?season=1&hour=23&blimpfire", PH, "die = () => {}; seasonT = stormWindow()[0] + stormWindow()[1] * 0.35", 6.3],   // lightning hit it at 3 s: about 3 s into the fall
+  ["blimp-wreck-blaze", "?season=0&hour=23&blimpfire", PH, "die = () => {}", 12],   // down at about 8.5 s: the wreck in full blaze
   ["fireworks-finale", "?season=1&hour=19.5&fireworks", PH, "", 9],   // about 8.5 s in: the barrage
 ];
 

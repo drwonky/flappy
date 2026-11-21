@@ -177,6 +177,17 @@ Values that do not parse are ignored, and the default is used. For example `?day
   - The show is a far backdrop that drifts past slowly, behind the hills, the pipes and the bird. It is only for looking at and changes nothing in the game. By day the sparks are fainter and leave small puffs of smoke.
   - `?flair=0` turns the shows off, this flag included.
 
+### `blimpfire`
+
+- **Syntax:** `?blimpfire` (flag)
+- **Default:** off.
+- **What it does:** A blimp appears one second after the page loads, and lightning hits it two seconds later, whatever the weather. It catches fire, sinks nose-up and lands on the far hills, where the wreck burns for 20 s, for testing and for fun.
+- **Example:** `flappy-seasons.html?blimpfire&hour=22`
+- **Interactions and caveats:**
+  - Without the flag the same thing happens by chance: a blimp that is up while a thunderstorm is on has about a one in three chance of being struck. It is only scenery: the bird and the game are not touched, and the game plays the same with or without a fire.
+  - The wreck scrolls with the far hills (slowly), so it may drift off the screen before the 20 s are up.
+  - `?flair=0` also turns it off, as it removes the blimps.
+
 ---
 
 ## Weather and world
@@ -225,7 +236,7 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Interactions and caveats:**
   - `?flair=0` turns all of them off, including the hawk and the flying saucer. The hawk can take the bird, so `?flair=0` also removes that risk.
   - The flying saucer only appears at night, and does not appear with `?noclock`.
-  - `?flair=0` also turns off the July 4th fireworks (see `fireworks`).
+  - `?flair=0` also turns off the July 4th fireworks (see `fireworks`) and the blimp disaster (see `blimpfire`).
 
 ### `trap`
 

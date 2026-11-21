@@ -596,3 +596,77 @@ describe("TV sizing", () => {
     assert.ok(lo >= 14 + 30 - 1e-9 && hi <= 14 + 512 - 113 - 30 + 1e-9, `gaps from ${lo} to ${hi}`);
   });
 });
+
+describe("blimp disaster", () => {
+  // lightning hits the blimp: it burns, falls, lands on the far hills' ground line and burns there for BLIMPFIRE.burn s
+  const strikeBlimp = (search = "?season=0", seed = 4) => {
+    const g = loadGame({ search, seed });
+    g.ev("BLIMPFIRE.par = 0; flNext.blimp = 1e9; blimp = makeBlimp(); blimp.x = W / 2; blimp.y = 60; blimp.dir = 1; blimp.v = 0; ts.I = 1; igniteBlimp(blimp); 0");
+    return g;
+  };
+  it("burns, falls, lands on the ground line, and the wreck burns for 20 s and is gone", () => {
+    const g = strikeBlimp();
+    assert.ok(g.ev("blimp.hit"), "the real blimp flies on, unseen");
+    const seen = [], at = {}; let maxN = 0;
+    g.run(60, i => {
+      if (i % 6) return;
+      const ph = g.ev("blimpFire ? blimpFire.phase : null");
+      maxN = Math.max(maxN, g.ev("bfN"));
+      if (ph !== seen[seen.length - 1]) { seen.push(ph); at[ph] = i / 120; if (ph === "wreck") at.y = g.ev("[blimpFire.y, blimpFire.s0, bfGround(), SKY - 26]"); }
+    });
+    assert.deepEqual(seen, ["burning", "falling", "wreck", null]);
+    near(at.null - at.wreck, 20, 0.5, "the wreck's burn");
+    assert.ok(at.falling > 2 && at.wreck > at.falling + 1, `falls from ${at.falling} to ${at.wreck}`);
+    const [y, s0, gr, hills] = at.y;
+    near(y + 9 + s0 * 22, gr, 0.5, "lowest point on the ground line");
+    assert.ok(gr >= hills - 4 && gr <= hills + 4, "the far hills' ground line");
+    assert.ok(maxN > 20 && maxN <= 500, `particles ${maxN}`);
+  });
+  it("tilts nose-up as the tail drops, and keeps its parallax: gone off screen early if the world scrolls it away", () => {
+    const g = strikeBlimp();
+    g.run(3.5);
+    assert.ok(g.ev("blimpFire.slope") > 0.3);
+    const g2 = loadGame({ search: "?season=0", seed: 4 });
+    g2.ev("flNext.blimp = 1e9; blimp = makeBlimp(); blimp.x = W / 2; blimp.y = 60; ts.I = 1; igniteBlimp(blimp); 0");
+    g2.run(60);
+    assert.equal(g2.ev("blimpFire"), null);
+  });
+  it("is struck by a storm's lightning, sometimes (BLIMPFIRE.p), once per blimp", () => {
+    const g = loadGame({ search: "?season=0", seed: 6 });
+    g.ev("flNext.blimp = 1e9; blimp = makeBlimp(); blimp.x = W / 2; blimp.fate = true; ts.I = 1; blimpStrikeCheck(); 0");
+    assert.equal(g.ev("blimpFire && blimpFire.phase"), "burning");
+    const h = loadGame({ search: "?season=0", seed: 6 });
+    h.ev("flNext.blimp = 1e9; blimp = makeBlimp(); blimp.x = W / 2; blimp.fate = false; ts.I = 1; blimpStrikeCheck(); 0");
+    assert.equal(h.ev("blimpFire"), null);
+    h.ev("ts.I = 0.2; blimp.fate = undefined; blimpStrikeCheck(); 0");   // not in a calm sky
+    assert.equal(h.ev("blimpFire"), null);
+  });
+  it("starts one with ?blimpfire, and none with ?flair=0", () => {
+    const g = loadGame({ search: "?season=0&blimpfire" });
+    g.run(0.5); assert.equal(g.ev("blimpFire"), null);
+    g.run(1); assert.equal(g.ev("blimpFire && blimpFire.phase"), "fly");
+    g.run(2); assert.equal(g.ev("blimpFire && blimpFire.phase"), "burning");
+    const k = loadGame({ search: "?season=0&blimpfire&flair=0" });
+    k.run(8); assert.equal(k.ev("blimpFire"), null); assert.equal(k.ev("bfFires"), 0);
+    assert.equal(loadGame({ search: "?season=0" }).ev("blimpFire"), null);
+  });
+  it("holds the particle cap", () => {
+    const g = loadGame({ search: "?season=0" });
+    g.ev("for (let i = 0; i < 3000; i++) bfPart(i % 4, 50, 50, 0, 0, 5, 2, 0, 0); 0");
+    assert.equal(g.ev("bfN"), 500);
+    g.run(2); assert.ok(g.ev("bfN") <= 500);
+  });
+  it("never changes the game: the same seed plays the same with and without a fire, and Math.random is untouched", () => {
+    const play = search => {
+      const g = loadGame({ search, seed: 21 }), s = [];
+      g.ev("Math.random = (f => () => { globalThis.__rb = (globalThis.__rb || 0) + 1; return f(); })(Math.random)"); globalThis.__rb = 0;
+      g.run(28, i => { if (i % 240 === 0) s.push(g.ev("[score, bird.y, stats.runs, dead, pipes.length]").join(",")); });
+      const n = globalThis.__rb; delete globalThis.__rb;
+      return { s: s.join("|"), fires: g.ev("bfFires"), n, phase: g.ev("blimpFire && blimpFire.phase") };
+    };
+    const a = play("?season=0"), b = play("?season=0&blimpfire");
+    assert.equal(a.fires, 0); assert.equal(b.fires, 1);
+    assert.equal(a.s, b.s);
+    assert.equal(a.n, b.n);
+  });
+});

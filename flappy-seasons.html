@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r43</div>
+<div id="hud">seasons r44</div>
 
 <script>
 "use strict";
@@ -382,6 +382,7 @@ function nightVeil() {                              // the world goes golden, th
 }
 function skyBehind() {                              // last of all, BEHIND everything: moon, shooting stars, stars, sky
   ctx.save(); ctx.globalCompositeOperation = "destination-over";   // (what goes first stays in front)
+  blimpSkyGlow();
   drawFireworks(0);                                // (so they sit behind the hills and the pipes, and the night's veil never dims them)
   if (!NOCLOCK) { drawMoon(); drawShooting(); drawStars(); }
   sky();
@@ -1193,6 +1194,7 @@ function stepStorm(dt) {
     ts.next = randIn(layer === 2 ? [0.6, 1.5] : [0.35, 1.2]);   // near strikes are spaced out: never 3 flashes a second
     const q = layer === 1 && Math.random() < POLE.wireP ? lineTarget() : null;
     strike(q ? 3 : layer, q);                         // the line on its poles draws some of the mid strikes
+    if (!q && layer < 2) blimpStrikeCheck();            // ...and a blimp up in the storm may draw one
   }
   if (ts.on && ts.I > 0.4 && ts.p > 0.05 && ts.p < 0.9) {   // anything up out of the ground draws the lightning
     const c = critterUp();
@@ -2304,7 +2306,9 @@ function makeGL(gl, cv) {
     const d = rx.getImageData(0, 0, 256, 1).data;
     for (let i = 0; i < 1024; i += 4) { const a = d[i + 3] / 255; d[i] = Math.round(d[i] * a); d[i + 1] = Math.round(d[i + 1] * a); d[i + 2] = Math.round(d[i + 2] * a); }
     t = tex(gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);   // (premultiplied above already: not twice, or every soft edge thins out)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(d.buffer, d.byteOffset, 1024));
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.bindTexture(gl.TEXTURE_2D, atlas);
     ramps.set(key, t);
     return t;
@@ -3184,6 +3188,7 @@ function skyline() {                              // green hills (snow-capped in
   ctx.globalAlpha = 1;
   drawTrain();                                    // between the two rows of hills
   drawYeti();
+  drawBlimpWreck();                               // a burnt-out blimp on the far hills
   if (m < 1) {                                    // near hills
     ctx.globalAlpha = 1 - m;
     for (let i = 0, n = reps(9, W + 60, 40); i < n; i++) {
@@ -3805,7 +3810,7 @@ function spr(rows, pal, x, y, flip, k, clipY, s = 1) {   // a cell is s logical 
 function stepFlair(dt) {
   if (FLAIR_MUL > 0) for (const k in flNext)
     if ((flNext[k] -= dt * FLAIR_MUL * (k === "gopher" && ts.I > 0.4 ? 4 : 1)) <= 0) flNext[k] = trySpawn(k) ? randIn(FL[k]) : 2 + 3 * Math.random();
-  stepTrain(dt); stepBlimp(dt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt); stepPoles(dt); stepUfo(dt);
+  stepTrain(dt); stepBlimp(dt); stepBlimpFire(dt); if (cosDt) stepBlimpSpray(cosDt); stepFlocks(dt); stepYeti(dt); stepHog(dt); stepGophers(dt); stepChips(dt); stepHawk(dt); stepPoles(dt); stepUfo(dt);
 }
 function trySpawn(k) {
   const r = Math.random(), has = kind => flocks.some(f => f.kind === kind);
@@ -3898,8 +3903,11 @@ function stepBlimp(dt) {
   if (b.x < -60 || b.x > W + 60) blimp = null;
 }
 function drawBlimp() {
-  if (!blimp) return;
-  const b = blimp, d = b.dir, cx = Math.round(b.x), cy = Math.round(b.y + 2 * Math.sin(b.t * 0.6));
+  if (blimp && !blimp.hit) blimpArt(blimp);
+  drawBlimpFire();                                  // (a blimp struck by lightning is drawn there instead)
+}
+function blimpArt(b) {
+  const d = b.dir, cx = Math.round(b.x), cy = Math.round(b.y + 2 * Math.sin(b.t * 0.6));
   const tail = cx - d * 22;
   for (let r = -8; r <= 8; r++) {                   // tail fins, red, top and bottom
     const a = Math.abs(r); if (a < 5) continue;
@@ -3920,6 +3928,282 @@ function drawBlimp() {
   for (let i = 0; i < 3; i++) px(cx - 4 + i * 3, cy + 8, 1, 1, "#ffd86a");
   if ((b.t * 20 | 0) % 2) px(cx - d * 8, cy + 6, 1, 4, "#c8d0d8");   // the propeller
   if ((b.t * 1.2 % 1) < 0.15) px(tail, cy - 9, 1, 1, "#ff3a2a");     // nav light
+}
+
+/* ---------- BLIMP DISASTER: now and then, in a thunderstorm, lightning hits the (unmanned, advertising) blimp. It catches fire, the
+   flames running along the skin from where the bolt struck and burning it off to show the girders; the tail goes first, so it sinks
+   nose-up, trailing smoke and embers, and comes down on the far hills (its own parallax layer, BLIMPFIRE.par x the ground's speed,
+   behind the near hills, the pipes and the bird), where it falls in on itself and burns for BLIMPFIRE.burn s: tall flames, a column of
+   smoke on the wind, embers, a glow at night; the last few s it dies down to a smoulder. ?blimpfire: a blimp, then a strike 2 s later,
+   whatever the weather (?flair=0: none). Looks only: its own random (bfRnd), and the blimp it hit flies on unseen, so the game's
+   Math.random and its flair schedule run as if it were not there. The spray is pooled (BLIMPFIRE.max). The body and the smoke are
+   painted with the sky (the night's veil darkens them), the flames, embers and glow after the veil, so they stay bright. ---------- */
+const BLIMPFIRE = { burn: 20, spread: 2.6, taper: 4, max: 500, par: 0.06, p: 0.35, hit: 2 };
+const BFFLAG = qflag("blimpfire");
+const bfRnd = (() => { let s = 0x424c4d50; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
+let blimpFire = null, bfAuto = BFFLAG && FLAIR_MUL > 0 ? 1 : -1, bfN = 0, bfFires = 0;
+const BFN = BLIMPFIRE.max, bfX = new Float32Array(BFN), bfY = new Float32Array(BFN), bfVX = new Float32Array(BFN), bfVY = new Float32Array(BFN),
+      bfAge = new Float32Array(BFN), bfLife = new Float32Array(BFN), bfG = new Float32Array(BFN), bfKind = new Uint8Array(BFN), bfSz = new Uint8Array(BFN), bfCl = new Uint8Array(BFN);
+const BF_EMB = ["#fff2b0", "#ffc83a", "#ff7a24", "#c03418"], BF_FLM = ["#d8321c", "#ff7a24", "#ffc83a", "#fff6c8"];   // embers by age; flames, outside in
+const BF_HV = Array.from({ length: 49 }, (_, i) => Math.round(7.6 * Math.sqrt(Math.max(0, 1 - ((i - 24) / 24.4) ** 2))));   // the envelope's half-height at each column
+const bfGround = () => SKY - 24;                   // the far hills' ground line (their tops are 26 up), a little sunk in
+function bfPart(k, x, y, vx, vy, life, sz, g, cl) {   // kind: 0 ember, 1 smoke, 2 glowing debris, 3 flame lick
+  if (bfN >= BFN) return;
+  const i = bfN++;
+  bfX[i] = x; bfY[i] = y; bfVX[i] = vx; bfVY[i] = vy; bfAge[i] = 0; bfLife[i] = life; bfSz[i] = sz; bfG[i] = g; bfKind[i] = k; bfCl[i] = cl;
+}
+function bfBolt(x1, y1) {                           // a jagged run from the cloud down to the blimp, on bfRnd
+  const x0 = x1 + (bfRnd() - 0.5) * 50, n = Math.max(3, Math.round((y1 + 6) / 11)), main = [[x0, -6]];
+  for (let i = 1; i < n; i++) { const f = i / n; main.push([x0 + (x1 - x0) * f + (bfRnd() * 2 - 1) * 9, -6 + (y1 + 6) * f + (bfRnd() * 2 - 1) * 3]); }
+  main.push([x1, y1]);
+  const br = [];
+  for (let b = 0; b < 2; b++) {
+    let [x, y] = main[1 + ((bfRnd() * (main.length - 2)) | 0)]; const sd = bfRnd() < 0.5 ? -1 : 1, q = [[x, y]];
+    for (let i = 0, m = 2 + ((bfRnd() * 3) | 0); i < m; i++) { x += sd * (4 + bfRnd() * 8); y += 5 + bfRnd() * 9; q.push([x, y]); }
+    br.push(q);
+  }
+  return [main, br];
+}
+function igniteBlimp(b, u0) {                       // lightning on the envelope at u0 (px along it from the middle, + to the nose); b: a blimp, or the one already up
+  const dir = b.dir, y = b.y + (b.bt !== undefined ? 2 * Math.sin(b.bt * 0.6) : 2 * Math.sin(b.t * 0.6));
+  if (u0 === undefined) u0 = bfRnd() < 0.75 ? -(13 + bfRnd() * 8) : (bfRnd() * 2 - 1) * 20;
+  const f = blimpFire = { phase: "burning", t: 0, dir, x: b.x, y, v: b.v, vx: 0, vy: 0, slope: 0.05, sy: 1, u0, flash: 1, fx: 0, fy: 0, acc: [0, 0, 0, 0], s0: 0 };
+  f.fx = b.x + dir * u0; f.fy = y;
+  bfFires++;
+  const [m, br] = bfBolt(f.fx, f.fy);                // the bolt: the strike the storm just made (or one of its own)
+  const s = strikes.length && strikes[strikes.length - 1].age < 0.02 ? strikes[strikes.length - 1] : (strikes.push({ layer: 1, ox: 0, age: 0, main: m, br, fl: 0.7, re2: false }), strikes[strikes.length - 1]);
+  s.layer = 1; s.main = m; s.br = br; s.ox = 0; s.fl = 0.7;
+  ts.sky = Math.max(ts.sky, 0.8);
+  if (blimp === b) b.hit = true;   // (the real blimp flies on, unseen, so the flair schedule is untouched)
+  for (let i = 0; i < 24; i++) { const a = bfRnd() * 6.283, v = 40 + bfRnd() * 110; bfPart(i & 1 ? 3 : 0, f.fx, f.fy, Math.cos(a) * v, Math.sin(a) * v - 20, 0.4 + bfRnd() * 0.6, 2, 120, 0); }
+  return f;
+}
+function blimpStrikeCheck() {                       // after a far or mid strike in a storm: does it find the blimp? (one chance in BLIMPFIRE.p per blimp)
+  const b = blimp;
+  if (!b || b.hit || blimpFire || ts.I < 0.5 || b.x < 24 || b.x > W - 24) return;
+  if (b.fate === undefined) b.fate = bfRnd() < BLIMPFIRE.p;
+  if (b.fate) igniteBlimp(b);
+}
+const bfTi = (f, u) => Math.abs(u - f.u0) / (44 / BLIMPFIRE.spread) + 0.25 * hash1(u * 1.7 + f.u0);   // when the skin at u catches
+function stepBlimpFire(dt) {
+  if (bfAuto > 0 && (bfAuto -= dt) <= 0) {            // ?blimpfire: one up on screen at once, hit a couple of s later
+    bfAuto = -1;
+    if (!blimpFire) { const dir = bfRnd() < 0.5 ? 1 : -1; blimpFire = { phase: "fly", t: 0, bt: 0, dir, x: W * (dir > 0 ? 0.3 : 0.7), y: 40 + bfRnd() * 40, v: 9 + bfRnd() * 6, vx: 0, vy: 0, slope: 0, sy: 1 }; }
+  }
+  const f = blimpFire;
+  if (!f) return;
+  f.t += dt;
+  if (f.flash > 0) f.flash = Math.max(0, f.flash - dt * 4);
+  if (f.phase === "fly") {
+    f.bt += dt; f.x += (f.dir * f.v + airU * 0.12 - gspd * 0.03) * dt;
+    if (f.t >= BLIMPFIRE.hit) igniteBlimp(f);
+    else if (f.x < -60 || f.x > W + 60) blimpFire = null;
+    return;
+  }
+  if (f.phase === "wreck") {
+    f.x -= gspd * BLIMPFIRE.par * dt;
+    const c = smooth(f.t / 0.7);
+    f.slope = f.s0 * (1 - c); f.sy = 1 - 0.62 * c; f.y = bfGround() - 9 * f.sy - 22 * f.slope;
+    if (f.t >= BLIMPFIRE.burn || f.x < -75 || f.x > W + 75) blimpFire = null;
+    return;
+  }
+  const t = f.t;
+  f.vy = Math.min(135, f.vy + (t < 0.5 ? 0 : t < BLIMPFIRE.spread + 0.6 ? 20 : 60) * dt);
+  f.y += f.vy * dt;
+  f.slope += (0.12 + 0.5 * smooth((t - 0.3) / 3) - f.slope) * (1 - Math.exp(-2 * dt));
+  f.x += (f.dir * f.v * Math.exp(-0.35 * t) + airU * 0.12 - gspd * (0.03 + 0.03 * smooth(t / 4))) * dt;
+  if (f.phase === "burning" && t >= BLIMPFIRE.spread + 0.6) f.phase = "falling";
+  if (f.y + 9 + f.slope * 22 >= bfGround()) {         // down: a burst of flame and sparks, and it falls in on itself
+    f.phase = "wreck"; f.t = 0; f.s0 = f.slope; f.y = bfGround() - 9 - f.slope * 22; f.flash = 1; f.vy = 0;
+    for (let i = 0; i < 70; i++) {
+      const a = -Math.PI * (0.05 + 0.9 * bfRnd()), v = 40 + bfRnd() * 150, x = f.x + (bfRnd() * 2 - 1) * 22, y = bfGround() - 4;
+      const k = i % 3 === 0 ? 0 : i % 3 === 1 ? 3 : 2;
+      bfPart(k, x, y, Math.cos(a) * v, Math.sin(a) * v, 0.5 + bfRnd() * 1.1, k === 3 ? 3 : 2, 130, 0);
+    }
+    for (let i = 0; i < 14; i++) bfPart(1, f.x + (bfRnd() * 2 - 1) * 20, bfGround() - 6, (bfRnd() - 0.5) * 30, -20 - bfRnd() * 30, 4 + bfRnd() * 2, 5, 0, i % 2);
+  }
+}
+function stepBlimpSpray(dt) {                       // once per drawn frame: new embers and smoke, and everything moves on
+  const f = blimpFire;
+  if (f && f.phase !== "fly") {
+    const wk = f.phase === "wreck", k = wk ? Math.max(0, Math.min(1, (BLIMPFIRE.burn - f.t) / BLIMPFIRE.taper)) : 1, rise = wk ? smooth(f.t / 1.2) : 1;
+    const cx = f.x, d = f.dir, ac = f.acc;
+    const rate = wk ? [30 * (0.3 + 0.7 * k) * rise, 22 * (0.4 + 0.6 * k) * rise, 46 * k * k * rise, 3 * k * rise] : [26, 16, 34, 3];   // smoke, embers, licks, debris per s
+    for (let j = 0; j < 4; j++) ac[j] += rate[j] * dt;
+    const at = () => {                                 // somewhere on the fire
+      if (wk) return [cx + (bfRnd() * 2 - 1) * 22, bfGround() - 5 - bfRnd() * 3];
+      for (let n = 0; n < 4; n++) { const u = Math.round(bfRnd() * 48 - 24); if (f.t - bfTi(f, u) > 0) return [cx + d * u, f.y - f.slope * u - BF_HV[u + 24] * bfRnd()]; }
+      return null;
+    };
+    const wind = airU * 0.4 - gspd * (wk ? BLIMPFIRE.par : 0.04);
+    while (ac[0] >= 1) { ac[0]--; const p = at(); if (p) bfPart(1, p[0], p[1], wind + (bfRnd() - 0.5) * 8, -(wk ? 18 + bfRnd() * 18 : 8 + bfRnd() * 10), wk ? 5 + bfRnd() * 2.5 : 3 + bfRnd() * 2, wk ? 4 : 3, 0, bfRnd() < 0.65 ? 0 : 1); }
+    while (ac[1] >= 1) { ac[1]--; const p = at(); if (p) bfPart(0, p[0], p[1], (bfRnd() - 0.5) * 40, -(30 + bfRnd() * (wk ? 90 : 40)), 1 + bfRnd() * 1.2, 1 + (bfRnd() < 0.3 ? 1 : 0), 70, 0); }
+    while (ac[2] >= 1) { ac[2]--; const p = at(); if (p) bfPart(3, p[0], p[1], (bfRnd() - 0.5) * 14 + wind * 0.3, -(30 + bfRnd() * 40), 0.5 + bfRnd() * 0.4, 3, 0, 0); }
+    while (ac[3] >= 1) { ac[3]--; const p = at(); if (p) bfPart(2, p[0], p[1], (bfRnd() - 0.5) * 20, -10, 1.5 + bfRnd() * 2, 2, 140, 0); }
+  }
+  for (let i = 0; i < bfN;) {
+    const a = (bfAge[i] += dt), k = bfKind[i];
+    if (a >= bfLife[i] || bfY[i] > SKY - 17 && k !== 1) { bfN--; if (i < bfN) { bfX[i] = bfX[bfN]; bfY[i] = bfY[bfN]; bfVX[i] = bfVX[bfN]; bfVY[i] = bfVY[bfN]; bfAge[i] = bfAge[bfN]; bfLife[i] = bfLife[bfN]; bfG[i] = bfG[bfN]; bfKind[i] = bfKind[bfN]; bfSz[i] = bfSz[bfN]; bfCl[i] = bfCl[bfN]; } continue; }
+    if (k === 1) { bfVX[i] += (airU * 0.4 - gspd * 0.05 - bfVX[i]) * Math.min(1, 0.8 * dt); bfVY[i] -= 3 * dt; }
+    else { bfVY[i] += bfG[i] * dt; bfX[i] -= gspd * 0.05 * dt; }
+    bfX[i] += bfVX[i] * dt; bfY[i] += bfVY[i] * dt; i++;
+  }
+}
+function bfBurnt(f, u) { return f.t - bfTi(f, u); }
+function drawBlimpFireSmoke() {                      // with the sky, behind the clouds and hills: the veil darkens it
+  if (!bfN) return;
+  for (let c = 0; c < 2; c++) {
+    ctx.fillStyle = c ? "#6a6c78" : "#1c1a20";
+    for (let i = 0; i < bfN; i++) {
+      if (bfKind[i] !== 1 || bfCl[i] !== c) continue;
+      const e = bfAge[i] / bfLife[i], r = (bfSz[i] + e * 7) | 0, x = Math.round(bfX[i] / 2) * 2, y = Math.round(bfY[i] / 2) * 2, h = r >> 1 << 1;
+      ctx.globalAlpha = Math.min(1, e * 6) * (1 - e) * (c ? 0.5 : 0.72);
+      ctx.fillRect(x - r, y - (h >> 1), 2 * r, h); ctx.fillRect(x - (h >> 1), y - r, h, 2 * r);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+function bfSkin(f, cx, cy, d, P, fr) {                    // the envelope of a blimp on fire (or what is left of it), a column at a time
+  const t = f.t, sl = f.slope, wreck = f.phase === "wreck", sy = f.sy;
+  for (let u = -24; u <= 24; u++) {
+    const hv = BF_HV[u + 24], a = wreck ? 9 : bfBurnt(f, u);
+    if (a < 0) {                                       // skin: the same shading
+      if (fr) continue;
+      P(u, -hv, 1, 1, "#56606c"); if (hv > 4) P(u, -hv + 1, 1, hv - 4, "#eef2f6");
+      const m0 = Math.max(-hv + 1, -3), m1 = Math.min(hv - 1, 2); if (m1 >= m0) P(u, m0, 1, m1 - m0 + 1, "#c8d0d8");
+      if (hv > 3) P(u, 3, 1, hv - 3, "#98a2ae"); P(u, hv, 1, 1, "#56606c");
+      continue;
+    }
+    const q = a < 0.9 ? 1 - a / 0.9 : 0;                // how much skin is left on the column
+    if (q > 0 && !fr) {                                // burning: charred, the skin curling back
+      P(u, -hv, 1, 2 * hv + 1, a < 0.3 ? "#6a5a4c" : "#3a322c");
+      const h = Math.round(hv * q); if (h > 0) P(u, -h, 1, 2 * h + 1, a < 0.3 ? "#c8d0d8" : "#7a7068");
+    }
+    const hs = Math.round(hv * sy);                    // the frame: the edges, and a rib every 6
+    const cut = wreck && hash1(u * 0.37 + 4.1) < 0.18;  // (a broken girder, in the wreck)
+    if (a >= 0.9 || q === 0) {
+      if (!cut) { P(u, -hs, 1, 1, fr ? "#a88a6a" : "#6a5a4c"); P(u, hs, 1, 1, fr ? "#5a4636" : "#2a2622"); }
+      if ((u + 24) % 6 === 0 && u < 24) P(u, -hs, 1, 2 * hs + 1, fr ? "#4a382c" : "#2a2622");
+      if (u & 1) P(u, 0, 1, 1, fr ? "#3a2c24" : "#1e1a18");
+    }
+  }
+}
+function bfBodyDraw(f, wreck, fr) {                      // the body: envelope, fins, gondola, in the sky or on the ground
+  const cx = Math.round(f.x), cy = Math.round(f.y), d = f.dir, sl = f.slope, sy = f.sy;
+  const P = (u, v, w, h, col) => px(d > 0 ? cx + u : cx - u - w, cy + v - sl * (u + w / 2), w, h, col);
+  const fa = u => wreck ? 9 : bfBurnt(f, u);
+  if (!wreck && !fr) {
+    const a = fa(-20);
+    if (a < 0.8) for (let r = -8; r <= 8; r++) { const m = Math.abs(r); if (m >= 5) P(-25, r, 13 - m, 1, a < 0 ? "#b8342a" : "#3a2420"); }   // tail fins
+    if (fa(-20) < 0.8) P(-25, 0, 10, 1, fa(-20) < 0 ? "#8e2a22" : "#3a2420");
+  }
+  bfSkin(f, cx, cy, d, P, fr);
+  if (fr) return;
+  if (!wreck && fa(6) < 0) { P(3, -3, 6, 5, "#f8e018"); P(4, -4, 4, 7, "#f8e018"); P(7, -2, 1, 1, "#20242a"); P(9, 0, 2, 1, "#e8483a"); }   // the yellow bird
+  if (wreck) {                                          // flattened: the gondola crushed, a few girders and the tail's stump sticking up
+    const c = smooth(f.t / 0.7);
+    P(-5, Math.round(8 - 3 * c), 10, Math.round(3 - c), "#3a424c"); P(-3, Math.round(8 - 3 * c), 2, 1, "#ffd86a");
+    for (let i = 0; i < 8; i++) {
+      const u = -23 + i * 6 + (hash1(i * 3.1) * 3 | 0), h = Math.round((4 + hash1(i * 5.3) * 12) * c), s = hash1(i * 7.7) < 0.5 ? -1 : 1;
+      for (let j = 0; j < h; j++) P(u + (j * s * 0.35 | 0), -Math.round(3 * sy) - j - 1, 1, 1, j > h - 3 ? "#6a5a4c" : "#2a2622");
+    }
+    P(-25, -4 + Math.round(c * 0), 4, 2, "#5a2420"); P(-24, -6, 2, 2, "#3a2420");
+  } else if (fa(0) > -9) {
+    P(-6, 7, 12, 3, fa(0) < 0.5 ? "#4e5864" : "#2e2c2c"); if (fa(0) < 0.5) for (let i = 0; i < 3; i++) P(-4 + i * 3, 8, 1, 1, "#ffd86a");
+  }
+}
+function drawBlimpFire() {                            // behind the clouds, in the sky: the body while it burns and falls, and the smoke
+  drawBlimpFireSmoke();
+  const f = blimpFire;
+  if (!f) return;
+  if (f.phase === "fly") blimpArt({ dir: f.dir, x: f.x, y: f.y, t: f.bt });
+  else if (f.phase !== "wreck") bfBodyDraw(f, false);
+}
+function drawBlimpWreck() {                           // in the skyline, behind the near hills: the heap on the far hills' ground, and the mound under it
+  const f = blimpFire;
+  if (!f || f.phase !== "wreck") return;
+  const x = Math.round(f.x), g = SKY - 26, dk = TSTORM.dark * ts.I, hd = dk > 0.01 ? mixHex(C.hillDark, "#10142a", dk) : C.hillDark;
+  ctx.fillStyle = hd; ctx.fillRect(x - 24, g, 48, 2); ctx.fillRect(x - 30, g + 2, 60, 2); ctx.fillRect(x - 36, g + 4, 72, 5);
+  ctx.fillStyle = "rgba(20,14,10,.55)"; ctx.fillRect(x - 18, g, 36, 1); ctx.fillRect(x - 24, g + 1, 48, 1);   // scorched
+}
+function bfGlowAt() {                                 // [x, y, strength 0..1+] of the fire's light, or null
+  const f = blimpFire;
+  if (!f || f.phase === "fly") return null;
+  if (f.phase === "wreck") { const k = Math.max(0, Math.min(1, (BLIMPFIRE.burn - f.t) / BLIMPFIRE.taper)); return [f.x, bfGround() - 12, (0.25 + 0.75 * k * k) * smooth(f.t / 1) * (0.9 + 0.1 * Math.sin(f.t * 17) * Math.sin(f.t * 5.3)) + 0.6 * f.flash * f.flash]; }
+  return [f.x, f.y, Math.min(1, f.t / 2.5) * 0.75 * (0.9 + 0.1 * Math.sin(f.t * 19)) + 0.8 * f.flash * f.flash];
+}
+function blimpSkyGlow() {                             // in skyBehind: warms the sky about the fire (the sky is painted last, behind all, so this is in front of it)
+  const g = bfGlowAt();
+  if (!g) return;
+  const m = (0.3 + 0.7 * (1 - dayK)) * g[2];
+  bfGlowFill(g[0], g[1], 150, 0.45 * m);
+}
+function bfGlowFill(x, y, r, a) {                     // a round, soft glow: one radial gradient (same stops every time, so GL keeps one ramp)
+  const grd = ctx.createRadialGradient(x, y, 0, x, y, r);
+  grd.addColorStop(0, "rgba(255,124,38,1)"); grd.addColorStop(0.3, "rgba(255,124,38,.55)"); grd.addColorStop(0.65, "rgba(255,124,38,.16)"); grd.addColorStop(1, "rgba(255,124,38,0)");
+  ctx.globalAlpha = Math.min(1, a); ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2831853); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+function drawBlimpGlow() {                            // after the veil: it lights what is painted near it, then the flames, embers and sparks over that
+  const f = blimpFire;
+  if (!f && !bfN) return;
+  const g = bfGlowAt();
+  if (g) {
+    const m = (0.3 + 0.7 * (1 - dayK)) * g[2];
+    ctx.save(); ctx.globalCompositeOperation = "source-atop";
+    bfGlowFill(g[0], g[1], 140, 0.5 * m);
+    ctx.restore();
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, SKY - 18);            // (not over the near hills or the pipes)
+  for (const p of pipes) for (const q of pipeRects(p)) ctx.rect(q[0], q[1], q[2] - q[0], q[3] - q[1]);
+  ctx.clip("evenodd");
+  if (f && f.phase !== "fly") bfFlames(f);
+  if (f && f.phase === "wreck") bfBodyDraw(f, true);   // the girders stand out against the flames
+  else if (f && f.phase !== "fly") bfBodyDraw(f, false, true);   // ...and the frame, lit by them, where the skin has gone
+  const n = bfN;
+  for (let c = 0; c < 4; c++) {                         // embers, debris and licks, by colour (one fillStyle each)
+    ctx.fillStyle = BF_EMB[c];
+    for (let i = 0; i < n; i++) {
+      const k = bfKind[i]; if (k === 1) continue;
+      const e = bfAge[i] / bfLife[i], ci = k === 3 ? Math.min(3, (e * 4.4) | 0) : Math.min(3, (e * e * 4) | 0);
+      if (ci !== c) continue;
+      const s = k === 3 ? Math.max(1, Math.round(bfSz[i] * (1 - e * 0.5))) : bfSz[i];
+      ctx.fillRect(Math.round(bfX[i]), Math.round(bfY[i]), s, s);
+    }
+  }
+  if (f && f.flash > 0.05) { const x = Math.round(f.phase === "wreck" ? f.x : f.fx), y = Math.round(f.phase === "wreck" ? bfGround() - 6 : f.fy); ctx.globalAlpha = Math.min(1, f.flash * 3); disc(x, y, 5 + 15 * f.flash, "#fffbe8"); disc(x, y, 3 + 8 * f.flash, "#ffffff"); ctx.globalAlpha = 1; }
+  ctx.restore();
+}
+function bfFlames(f) {                                // tongues of flame, two px wide, in four layers
+  const t = f.t, wk = f.phase === "wreck", cx = f.x, d = f.dir, FX = [], FB = [], FH = [], FW = [];
+  if (wk) {
+    const k = Math.max(0, Math.min(1, (BLIMPFIRE.burn - t) / BLIMPFIRE.taper)), rise = smooth(t / 1.2);
+    if (k < 0.1) return;
+    const sw = (0.78 + 0.22 * Math.sin(t * 1.1) + 0.12 * Math.sin(t * 2.9 + 1)) * Math.pow(k, 1.3) * rise;   // the whole fire swells and dies back
+    for (let u = -24; u <= 24; u += 2) {
+      const pr = Math.pow(Math.max(0.05, 1 - (u / 27) ** 2), 0.7), fl = 0.45 + 0.55 * hash1(u * 1.9 + ((t * 9) | 0) * 3.3), sh = 0.8 + 0.2 * Math.sin(t * 2.3 + u * 0.4);
+      FX.push(cx + u - 1); FB.push(bfGround() - 3); FH.push(Math.round(100 * pr * sw * fl * sh)); FW.push(pr > 0.7 ? 1 : 0);
+    }
+  } else {
+    const sl = f.slope, cy = f.y;
+    for (let u = -24; u <= 24; u += 2) {
+      const a = bfBurnt(f, u); if (a < 0) continue;
+      const hv = BF_HV[u + 24], fr = a < 0.9, e = Math.min(1, a / 0.35), fl = 0.5 + 0.5 * hash1(u * 1.3 + ((t * 10) | 0) * 2.9);
+      const h = (8 + 14 * fl + (f.phase === "falling" ? 8 : 0)) * e * (fr ? 1 : 0.85) * (0.85 + 0.15 * Math.sin(t * 7 + u));
+      FX.push((d > 0 ? cx + u : cx - u) - 1); FB.push(cy - sl * u + (fr ? hv * 0.4 : -hv + 1)); FH.push(Math.round(h)); FW.push(fr ? 1 : 0);
+    }
+  }
+  const lay = [1, 0.72, 0.46, 0.2];
+  for (let c = 0; c < 4; c++) {
+    ctx.fillStyle = BF_FLM[c];
+    for (let i = 0; i < FX.length; i++) {
+      if (c === 3 && !FW[i]) continue;
+      const h = Math.round(FH[i] * lay[c]); if (h < 1) continue;
+      ctx.fillRect(Math.round(FX[i]) - (c === 0 ? 1 : 0), Math.round(FB[i]) - h, c === 0 ? 4 : 3 - (c > 1 ? 1 : 0), h);
+    }
+  }
+  if (wk) { ctx.fillStyle = "#ff8a30"; for (let u = -22; u <= 22; u += 2) if (hash1(u * 3.3 + ((t * 6) | 0)) > 0.72) ctx.fillRect(Math.round(cx + u), bfGround() - 2 - (hash1(u) * 3 | 0), 1, 1); }   // red hot girders
 }
 
 /* ---------- birds in the sky ---------- */
@@ -4975,6 +5259,7 @@ function draw() {
     ctx.fillStyle = "rgba(127,232,255,.28)";
     ctx.fillRect(birdX - SPR_W / 2 - 6, bird.y - SPR_H / 2 - 6, SPR_W + 12, SPR_H + 12);
   }
+  drawBlimpGlow();                               // a burning blimp: flames, embers and the glow stay bright
   cactusGlow();
   drawTrail();
   drawStuntFx();

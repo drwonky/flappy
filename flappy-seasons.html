@@ -173,7 +173,7 @@ function envWind() { return sunMul <= 1 ? sunMul : Math.sqrt(sunMul); }   // x20
 setWindMul(1);
 /* ============================================================
    SUN - swings slowly across the sky. Light is parallel, (sunSX, -1) points at
-   the sun, so every pipe casts a shadow away from it. The SUN slider (?sun=)
+   the sun, so every pipe casts a shadow away from it. The ENV slider (?env=)
    sets how hard it bakes the bird; ?wind= still sets the wind.
    ============================================================ */
 const SUN = { period: 110, swing: 0.55 };   // s per swing back and forth, max shadow lean (a high desert sun)

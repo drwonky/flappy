@@ -35,6 +35,7 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     ["?env=0", PHONE], ["?env=20", PHONE], ["?fps&prof", PHONE], ["?lowres", TVSIZE], ["?hz=30", PHONE],
     ["?daylen=30&hour=17", PHONE], ["?season=3&snow=200&hour=23", PHONE], ["?season=1&sand=200", PHONE],
     ["?resetstats", PHONE], ["?tvs&tod&fps", TVSIZE],
+    ["?fireworks", PHONE], ["?fireworks&tvs&hour=21", TVSIZE], ["?fireworks&2d&season=1", PHONE], ["?fireworks&scan=delta&hour=22", TVSIZE],
     ["?2d", PHONE], ["?2d", DESKTOP], ["?scan=soft", TVSIZE], ["?scan=grille", TVSIZE], ["?scan=off", TVSIZE], ["?2d&scan=off", PHONE],
     ["?scan=delta", TVSIZE], ["?scan=slot", TVSIZE], ["?scan=delta", PHONE], ["?scan=slot", PHONE], ["?scan=delta&bloom=0", PHONE],
     ["?scan=lines&bloom=2", PHONE], ["?2d&scan=slot", PHONE],
@@ -206,6 +207,24 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
       assert.ok(dish, "no dish in the round after");
       assert.ok((await p.ev("DISH_MSGS")).includes(dish));
       await p.sleep(3500);
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+
+  it("puts on a July 4th show with ?fireworks, and it ends within about 12 s", async () => {
+    const p = await open("?fireworks&hour=22");
+    try {
+      let on = false, t0 = 0;
+      for (let i = 0; i < 100 && !on; i++) { await p.sleep(100); on = await p.ev("!!fireworks"); }
+      assert.ok(on, "no show started");
+      t0 = await p.ev("airClock");
+      await p.sleep(3000);
+      assert.ok((await p.ev("fwN")) > 0, "no sparks in the air");
+      assert.equal(await p.ev("dead"), false);
+      let over = false;   // game time, not wall time: on a busy machine the game clock lags the real one
+      for (let i = 0; i < 300 && !over; i++) { await p.sleep(100); over = await p.ev("!fireworks"); }
+      assert.ok(over, "the show never ended");
+      assert.ok((await p.ev("airClock")) - t0 <= 12, "it ran too long");
       assert.deepEqual(p.errors, []);
     } finally { await p.close(); }
   });

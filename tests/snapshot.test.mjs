@@ -61,6 +61,8 @@ const SCENES = [
   ["disco", "?season=0&hour=12", PH, "startDisco()", 3],
   ["tv-night", "?tvs&season=3&hour=22", TV, "", 3],
   ["tv-day-shadows", "?tvs&season=1&hour=12", TV, "", 3],
+  ["fireworks-night", "?season=1&hour=22&fireworks", PH, "", 4.5],   // the show started at 1 s: about 4 s in
+  ["fireworks-finale", "?season=1&hour=19.5&fireworks", PH, "", 9],   // about 8.5 s in: the barrage
 ];
 
 // render one scene on a fresh page; returns { p, png } (the caller closes p)

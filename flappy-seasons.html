@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r39</div>
+<div id="hud">seasons r40</div>
 
 <script>
 "use strict";
@@ -365,6 +365,7 @@ function nightVeil() {                              // the world goes golden, th
 }
 function skyBehind() {                              // last of all, BEHIND everything: moon, shooting stars, stars, sky
   ctx.save(); ctx.globalCompositeOperation = "destination-over";   // (what goes first stays in front)
+  drawFireworks(0);                                // (so they sit behind the hills and the pipes, and the night's veil never dims them)
   if (!NOCLOCK) { drawMoon(); drawShooting(); drawStars(); }
   sky();
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
@@ -798,6 +799,7 @@ function step(dt) {
   stepDisco(dt);
   stepSeason(dt);                  // the seasons turn through the crash too
   stepClock(dt); stepShooting(dt); // and the days
+  stepFireworks(dt, cosDt);        // and the fireworks of July 4th
   stepDish(dt);
   setWindMul(envWind() * windX * SFX.wind);
   if (windMul > 0) stepWind(dt);   // the wind keeps blowing through the crash
@@ -916,7 +918,7 @@ function step(dt) {
    from dist, so they move with it; the things kept in screen space are shifted. */
 function nextStage() {
   const S = homeX - BIRD_X;
-  dist += S; homeX -= S; birdX -= S;
+  dist += S; homeX -= S; birdX -= S; fwOff += S * FW.par;   // (the far fireworks stay where they were)
   for (const p of pipes) p.x -= S;
   for (const f of fallen) if (!pipes.includes(f.p)) f.p.x -= S;
   for (const c of cacti) c.x -= S;
@@ -3488,9 +3490,9 @@ function drawSeasonHud() {                         // on the ground: SUMMER, or 
     ctx.globalAlpha = 1;
   }
   let y2 = y + 20;
-  if (!NOCLOCK) {                                    // and under it, the time of day
-    const [n, col] = todName();
-    const t = TODREAL ? n + " " + String(Math.floor(hour)).padStart(2, "0") + ":" + String(Math.floor(hour % 1 * 60)).padStart(2, "0") : n;
+  if (!NOCLOCK || fireworks) {                       // and under it, the time of day (or the day)
+    const [n, col] = fireworks ? ["JULY 4TH", ["#ff6a5a", "#ffffff", "#7aa8ff"][(airClock * 3 | 0) % 3]] : todName();
+    const t = TODREAL && !fireworks ? n + " " + String(Math.floor(hour)).padStart(2, "0") + ":" + String(Math.floor(hour % 1 * 60)).padStart(2, "0") : n;
     txt(t, 9, y2 + 1, "rgba(0,0,0,.45)", F.hud, "left"); txt(t, 8, y2, col, F.hud, "left");
     y2 += 20;
   }
@@ -3600,6 +3602,172 @@ const FL = { train: [35, 75], blimp: [45, 95], buzz: [11, 24], geese: [16, 34], 
              yeti: [9, 18], hog: [7, 14], gopher: [45, 90], hawk: [30, 60], peck: 0.2 };   // s between sightings; peck = share of cacti
 const flNext = { train: 14, blimp: 30, buzz: 6, geese: 10, flock: 16, yeti: 4, hog: 3, gopher: 20, hawk: 25 };
 let train = null, blimp = null, flocks = [], yeti = null, hog = null, gophers = [], chips = [], puffs = [];
+
+/* ---------- JULY 4TH: the seasons are a year (spring starts at the March equinox), and each time it passes July 4th
+   a fireworks show goes up for about 10 s (?fireworks: one a second after the load; ?flair=0: none). A far parallax layer
+   (0.12x the ground's speed) in the sky, behind the clouds, the hills, the pipes and the bird: it is painted in skyBehind,
+   after the night's veil, so it stays vivid in the dark. Shells rise, then burst into sparks (peony, chrysanthemum, willow,
+   ring, crossette, palm, crackle); a few singles, a steady middle, a barrage at the end. Light only: nothing touches
+   the game. Its own seeded random, so the game's Math.random runs as if it were not there. Sparks are pooled. ---------- */
+const yearFrac = d => (((d - 79) / 365) % 1 + 1) % 1;   // day of the year (1 Jan = 0) -> how far round the season cycle (day 79, 20 Mar = 0)
+const FW = { at: yearFrac(185), dur: 10, fin: 7.4, par: 0.12, max: 600, top: 50, bot: 110 };   // July 4th is day 185
+const FWFLAG = qflag("fireworks");
+const FW_COLS = [["#ff5a4a", "#e03a3a", "#a82a30", "#6a1c2a"], ["#ffffff", "#e0e6f4", "#a8b4cc", "#6a7690"], ["#6aa0ff", "#4a7ae8", "#3454b0", "#223a78"],
+                 ["#ffe27a", "#ffc23a", "#d08a24", "#80501c"], ["#7aff9a", "#3ad870", "#24a058", "#186038"], ["#d08aff", "#a85ae8", "#7a3ab0", "#4a2478"]];
+const FW_PICK = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5], FW_KINDS = [0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 6, 6];   // red, white, blue most; peony, chrysanthemum, willow, ring, crossette, palm, crackle
+const fwRnd = (() => { let s = 0x4a554c34; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; }; })();
+let fireworks = null, fwShows = 0, fwPrev = seasonT / (4 * SEASON.len), fwAuto = FWFLAG && FLAIR_MUL > 0 ? 1 : -1, fwOff = 0, fwWait = false, fwLight = 0, fwLightC = "#ffffff";
+let fwN = 0, fwPuffN = 0;
+const FWN = FW.max, fwX = new Float32Array(FWN), fwY = new Float32Array(FWN), fwVX = new Float32Array(FWN), fwVY = new Float32Array(FWN), fwAge = new Float32Array(FWN),
+      fwLife = new Float32Array(FWN), fwSplit = new Float32Array(FWN), fwDr = new Float32Array(FWN), fwG = new Float32Array(FWN), fwPh = new Float32Array(FWN),
+      fwCol = new Uint8Array(FWN), fwSz = new Uint8Array(FWN), fwTl = new Uint8Array(FWN), fwFl = new Uint8Array(FWN), fwKey = new Uint8Array(FWN);
+const FWA = [fwX, fwY, fwVX, fwVY, fwAge, fwLife, fwSplit, fwDr, fwG, fwPh, fwCol, fwSz, fwTl, fwFl];
+const fwSh = Array.from({ length: 24 }, () => ({ on: false, x0: 0, y0: 0, x1: 0, y1: 0, t: 0, T: 1, ph: 0, c0: 0, c1: 0, kind: 0, fin: false }));
+const fwPuff = Array.from({ length: 48 }, () => ({ on: false, x: 0, y: 0, age: 0, life: 1, r: 2 }));
+const fwCnt = new Uint16Array(FW_COLS.length * 5 + 1), fwOrd = new Uint16Array(FWN);
+const fwPar = () => dist * FW.par - fwOff;            // how far the layer has slid by
+function fwSpark(x, y, vx, vy, life, col, sz, tl, dr, g, split, fl) {
+  if (fwN >= FWN) return;
+  const i = fwN++;
+  fwX[i] = x; fwY[i] = y; fwVX[i] = vx; fwVY[i] = vy; fwAge[i] = 0; fwLife[i] = life; fwCol[i] = col; fwSz[i] = sz; fwTl[i] = tl;
+  fwDr[i] = dr; fwG[i] = g; fwSplit[i] = split; fwFl[i] = fl; fwPh[i] = fwRnd() * 9;
+}
+function fwKill(i) { fwN--; if (i < fwN) for (let k = 0; k < FWA.length; k++) FWA[k][i] = FWA[k][fwN]; }
+function fwLaunch(fin) {
+  const s = fwSh.find(q => !q.on); if (!s) return;
+  const bx = W * (0.12 + 0.76 * fwRnd()), by = FW.top + fwRnd() * (SKY - FW.bot - FW.top), par = fwPar();
+  s.on = true; s.t = 0; s.T = fin ? 0.8 + 0.2 * fwRnd() : 0.8 + 0.6 * fwRnd(); s.ph = fwRnd() * 6; s.fin = fin;
+  s.x1 = bx + par; s.y1 = by; s.x0 = s.x1 + (fwRnd() - 0.5) * 30; s.y0 = SKY - 36;
+  s.kind = FW_KINDS[(fwRnd() * FW_KINDS.length) | 0]; s.c0 = FW_PICK[(fwRnd() * FW_PICK.length) | 0]; s.c1 = fwRnd() < 0.4 ? FW_PICK[(fwRnd() * FW_PICK.length) | 0] : s.c0;
+}
+function fwBurst(s) {
+  const R = 40 + fwRnd() * 26, k = s.kind, cx = s.x1, cy = s.y1, c0 = s.c0, c1 = s.c1, fin = s.fin ? 0.75 : 1;
+  const sph = () => { const z = fwRnd() * 2 - 1, a = fwRnd() * 6.2832, r = Math.sqrt(1 - z * z); return [Math.cos(a) * r, Math.sin(a) * r]; };   // a shell of sparks, seen from the side
+  let n;
+  if (k === 0 || k === 1) {                          // peony: a ball; chrysanthemum: the same with trails
+    n = Math.round((k ? 44 + fwRnd() * 22 : 38 + fwRnd() * 32) * fin);
+    for (let i = 0; i < n; i++) { const [dx, dy] = sph(), v = R * 2.3 * (k ? 0.6 + 0.4 * fwRnd() : 0.9 + 0.1 * fwRnd());
+      fwSpark(cx, cy, dx * v, dy * v, (k ? 1.5 : 1.2) + fwRnd() * 0.5, i & 1 ? c1 : c0, 1, k ? 3 : 0, 2.3, 26, 0, 0); }
+  } else if (k === 2) {                              // willow: gold, drooping long and slow
+    n = Math.round((32 + fwRnd() * 16) * fin);
+    for (let i = 0; i < n; i++) { const [dx, dy] = sph(), v = R * 1.5 * (0.5 + 0.5 * fwRnd());
+      fwSpark(cx, cy, dx * v, dy * v, 2.2 + fwRnd() * 0.8, 3, 1, 5, 1.5, 16, 0, 0); }
+  } else if (k === 3) {                              // ring: a tilted circle
+    n = 24 + (fwRnd() * 8 | 0); const ry = 0.3 + 0.7 * fwRnd(), rot = fwRnd() * 3.1416, cr = Math.cos(rot), sr = Math.sin(rot);
+    for (let i = 0; i < n; i++) { const a = i / n * 6.2832, x = Math.cos(a), y = Math.sin(a) * ry, v = R * 2.1;
+      fwSpark(cx, cy, (x * cr - y * sr) * v, (x * sr + y * cr) * v, 1.2 + fwRnd() * 0.2, c0, 1, 1, 2.1, 22, 0, 0); }
+  } else if (k === 4) {                              // crossette: a few sparks that split in four
+    n = 4 + (fwRnd() * 2 | 0); const a0 = fwRnd() * 6.2832;
+    for (let i = 0; i < n; i++) { const a = a0 + i / n * 6.2832, v = R * 1.9;
+      fwSpark(cx, cy, Math.cos(a) * v, Math.sin(a) * v, 1.5, c0, 2, 2, 1.8, 20, 0.62, 2); }
+  } else if (k === 5) {                              // palm: a few thick gold arms
+    n = 5 + (fwRnd() * 3 | 0); const a0 = fwRnd() * 6.2832;
+    for (let i = 0; i < n; i++) for (let j = 0; j < 7; j++) { const a = a0 + i / n * 6.2832 + (fwRnd() - 0.5) * 0.14, v = R * 2.1 * (0.5 + 0.1 * j);
+      fwSpark(cx, cy, Math.cos(a) * v, Math.sin(a) * v, 1.7 + fwRnd() * 0.25, 3, 2, 2, 1.7, 24, 0, 0); }
+  } else {                                           // crackle: white twinkles that flash on and off near the end
+    n = Math.round((42 + fwRnd() * 18) * fin);
+    for (let i = 0; i < n; i++) { const [dx, dy] = sph(), v = R * 2.2 * (0.5 + 0.5 * fwRnd());
+      fwSpark(cx, cy, dx * v, dy * v, 1.4 + fwRnd() * 0.6, i % 3 ? 1 : c0, 1, 0, 2.2, 26, 0, 1); }
+  }
+  fwLight = Math.min(1.2, fwLight + 0.6); fwLightC = FW_COLS[c0][1];
+  for (let i = 0, m = 2 + (fwRnd() * 2 | 0); i < m; i++) { const p = fwPuff.find(q => !q.on); if (!p) break; fwPuffN++;   // a little smoke, that hangs about by day
+    p.on = true; p.x = cx + (fwRnd() - 0.5) * R; p.y = cy + (fwRnd() - 0.5) * R * 0.8; p.age = 0; p.life = 4 + fwRnd() * 2.5; p.r = 2 + (fwRnd() * 2 | 0) * 2; }
+}
+function fwRain() { const [s0, d] = stormWindow(); return ts.I > 0.3 || (seasonT >= s0 && seasonT < s0 + d); }   // a thunderstorm now (or just about to break)
+function stepFireworks(dt, c) {
+  const cur = seasonT / (4 * SEASON.len);            // how far round the year (a fraction, so a DISCO change of pace keeps it)
+  const crossed = fwPrev <= cur ? fwPrev < FW.at && FW.at <= cur : fwPrev < FW.at || FW.at <= cur;   // (through the wrap too)
+  fwPrev = cur;
+  if (FLAIR_MUL > 0 && !fireworks && crossed) fwWait = true;
+  if (fwWait && !fireworks) {                        // rained out: put off until the storm is over, if it is still summer
+    if (FLAIR_MUL <= 0 || seasonI !== 1) fwWait = false;
+    else if (!fwRain()) { fwWait = false; fireworks = { t: 0, next: 0.3, left: -1 }; fwShows++; }
+  }
+  if (FLAIR_MUL > 0 && !fireworks && fwAuto > 0 && (fwAuto -= dt) <= 0) { fwAuto = -1; fireworks = { t: 0, next: 0.3, left: -1 }; fwShows++; }   // ?fireworks: whatever the weather
+  if (fwLight > 0) fwLight = Math.max(0, fwLight - dt / 0.3);
+  if (!c) return;
+  const f = fireworks;
+  if (f) {
+    f.t += c;
+    while (f.t >= f.next && f.left !== 0) {
+      const fin = f.t >= FW.fin;
+      if (fin && f.left < 0) f.left = 9 + (fwRnd() * 4 | 0);
+      fwLaunch(fin);
+      if (fin) { f.left--; f.next += 0.07 + fwRnd() * 0.06; }
+      else {
+        if (f.t > 3.4 && fwRnd() < 0.3) fwLaunch(false);
+        f.next = f.t < 3.4 ? f.next + 1.2 + fwRnd() * 0.4 : Math.min(FW.fin, f.next + 0.4 + fwRnd() * 0.4);
+      }
+    }
+    if (f.t >= FW.dur) { fireworks = null; for (const s of fwSh) s.on = false; }
+  }
+  for (const s of fwSh) if (s.on && (s.t += c) >= s.T) { s.on = false; fwBurst(s); }
+  for (let i = 0; i < fwN;) {
+    const a = (fwAge[i] += c);
+    if (a >= fwLife[i]) { fwKill(i); continue; }
+    const sp = fwSplit[i];
+    if (sp && a >= sp) {                             // crossette: four more from here
+      const r = fwRnd() * 1.5;
+      for (let j = 0; j < 4; j++) { const an = r + j * 1.5708; fwSpark(fwX[i], fwY[i], fwVX[i] * 0.3 + Math.cos(an) * 50, fwVY[i] * 0.3 + Math.sin(an) * 50, 0.8, fwCol[i], 1, 1, 2.2, 22, 0, 0); }
+      fwKill(i); continue;
+    }
+    const k = Math.max(0, 1 - fwDr[i] * c);
+    fwVX[i] *= k; fwVY[i] = fwVY[i] * k + fwG[i] * c; fwX[i] += fwVX[i] * c; fwY[i] += fwVY[i] * c; i++;
+  }
+  if (fwPuffN) for (const p of fwPuff) if (p.on) { p.age += c; p.x += airU * 0.3 * c; p.y -= 2 * c; if (p.age >= p.life) { p.on = false; fwPuffN--; } }
+}
+const FW_DAYC = [["#e02020", "#c01818", "#901418", "#601018"], ["#9aa6bc", "#8490aa", "#6a7690", "#505c76"], ["#2050e0", "#1a40b8", "#183090", "#142468"],
+                ["#d89000", "#b87400", "#905a00", "#684000"], ["#10a040", "#108838", "#0c6a2c", "#0a4a20"], ["#9028d8", "#7820b0", "#5c1888", "#401060"]];   // darker, to read on a bright sky
+function drawFireworks(pass) {                       // pass 0: always, behind everything (skyBehind: unveiled, so vivid at night and dusk); 1: by day, in front of the sky haze but behind the hills, fading in with the light
+  const f = fireworks, day = dayK, par = fwPar(), w = smooth(day), A = pass ? w : 1, cols = pass ? FW_DAYC : FW_COLS;
+  if ((!f && !fwN && !fwPuffN && fwLight <= 0) || (A < 0.01 && !(pass === 0 && fwLight > 0))) return;
+  const core = pass ? 0.3 : 0.14;
+  if (pass && fwN) {                                 // a dark edge under each, so it shows on a pale sky
+    ctx.fillStyle = "#1c1830"; ctx.globalAlpha = 0.6 * A;
+    for (let i = 0; i < fwN; i++) { const x = Math.round(fwX[i] - par) + 1, d = fwSz[i] + 1 + (fwAge[i] < core); if (x > -6 && x < W + 6) ctx.fillRect(x, Math.round(fwY[i]) + 1, d, d); }
+  }
+  for (let i = 0; i < fwN; i++) if (fwAge[i] < core) {   // the first frames of a burst: a bright 2 px core
+    const x = Math.round(fwX[i] - par), y = Math.round(fwY[i]); if (x < -2 || x > W) continue;
+    ctx.globalAlpha = A; ctx.fillStyle = "#ffffff"; ctx.fillRect(x, y, 2, 2);
+  }
+  fwCnt.fill(0);
+  for (let i = 0; i < fwN; i++) {                    // sparks, in batches by colour and shade
+    const u = fwAge[i] / fwLife[i], lv = u < 0.5 ? 0 : u < 0.72 ? 1 : u < 0.86 ? 2 : u < 0.95 ? 3 : 4;
+    if ((fwFl[i] & 1) && u > 0.3 && (((fwAge[i] * 14 + fwPh[i]) | 0) & 1)) { fwKey[i] = 255; continue; }   // crackle: on, off
+    const key = fwCol[i] * 5 + lv; fwKey[i] = key; fwCnt[key + 1]++;
+  }
+  for (let k = 1; k < fwCnt.length; k++) fwCnt[k] += fwCnt[k - 1];
+  for (let i = 0; i < fwN; i++) if (fwKey[i] !== 255) fwOrd[fwCnt[fwKey[i]]++] = i;
+  for (let key = 0, at = 0; key < fwCnt.length - 1; key++) {   // (fwCnt[key] is now where the next one starts)
+    const end = fwCnt[key]; if (end === at) continue;
+    const lv = key % 5; ctx.fillStyle = cols[(key - lv) / 5][lv > 3 ? 3 : lv]; ctx.globalAlpha = lv > 3 ? A * 0.5 : A;
+    for (; at < end; at++) {
+      const i = fwOrd[at], x = fwX[i] - par, y = fwY[i], sz = fwSz[i] + pass;   // (by day a spark is a px bigger: 1 px is lost on a bright sky)
+      if (x < -6 || x > W + 6) continue;
+      ctx.fillRect(Math.round(x), Math.round(y), sz, sz);
+      for (let t = pass ? Math.max(fwTl[i], 4) : fwTl[i]; t > 0; t--) ctx.fillRect(Math.round(x - fwVX[i] * 0.022 * t), Math.round(y - fwVY[i] * 0.022 * t), 1, 1);
+    }
+  }
+  for (const s of fwSh) if (s.on) {                  // rising shells: a bright head and a fading tail
+    for (let t = 0; t < 8; t++) {
+      const u = Math.max(0, s.t / s.T - t * 0.022), e = 1 - (1 - u) * (1 - u);
+      ctx.globalAlpha = (t ? 0.7 * (1 - t / 8) : 1) * A; ctx.fillStyle = t ? "#ffb050" : "#fff4d0";
+      ctx.fillRect(Math.round(s.x0 + (s.x1 - s.x0) * e - par + Math.sin(u * 22 + s.ph)), Math.round(s.y0 + (s.y1 - s.y0) * e), 1, 1);
+    }
+  }
+  if (fwPuffN) {                                     // smoke: by day only, mostly
+    ctx.fillStyle = pass ? "#f2f4f8" : "#dfe3ea";
+    for (const p of fwPuff) if (p.on) {
+      ctx.globalAlpha = (pass ? 0.8 : 0.06) * A * Math.min(1, p.age / 0.4, (p.life - p.age) / 2.5);
+      const x = Math.round((p.x - par) / 2) * 2, y = Math.round(p.y / 2) * 2, r = Math.round(p.r * (1 + p.age * 0.25) / 2) * 2;
+      ctx.fillRect(x - r, y - 1, 2 * r, 2); ctx.fillRect(x - r + 2, y - 3, 2 * r - 4, 6);
+    }
+  }
+  if (!pass && fwLight > 0 && day < 0.95) {                   // each burst lights the sky, a very little
+    ctx.globalAlpha = 0.07 * Math.min(1, fwLight) * (1 - day); ctx.fillStyle = fwLightC; ctx.fillRect(0, 0, W, SKY);
+  }
+  ctx.globalAlpha = 1;
+}
 const NEAR_P = 0.14;                                // the near hills' parallax
 function nearHillX(i) { return Math.round((((i * 40) - dist * NEAR_P) % (W + 60) + W + 60) % (W + 60) - 30); }
 
@@ -4761,6 +4929,7 @@ function draw() {
   drawBlimp();                                   // high up, behind the clouds
   clouds();
   drawSmoke();                                   // far away, behind everything solid
+  drawFireworks(1);                              // July 4th by day (at night: behind it all, in skyBehind)
   drawRainbow();
   drawFlocks();                                  // birds wheeling in the sky
   stormSky();                                    // the storm's dark sky, lit up by the flashes...

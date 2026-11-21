@@ -166,6 +166,17 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Example:** `flappy-seasons.html?noclock`
 - **Interactions and caveats:** Overrides `tod`, `hour` and `daylen`.
 
+### `fireworks`
+
+- **Syntax:** `?fireworks` (flag)
+- **Default:** off.
+- **What it does:** Starts a July 4th fireworks show one second after the page loads, for testing and for fun.
+- **Example:** `flappy-seasons.html?fireworks&hour=22`
+- **Interactions and caveats:**
+  - The four seasons make up a year that starts at the March equinox (20 March), so July 4th falls early in summer, about 32.5 s into the cycle at the default `seasonlen`. Each time the year passes July 4th a show goes up on its own, with or without this flag. It lasts about 10 s: a few single shells, a steady middle and a barrage at the end, with the last sparks falling after that. The season line on the ground reads JULY 4TH while it runs.
+  - The show is a far backdrop that drifts past slowly, behind the hills, the pipes and the bird. It is only for looking at and changes nothing in the game. By day the sparks are fainter and leave small puffs of smoke.
+  - `?flair=0` turns the shows off, this flag included.
+
 ---
 
 ## Weather and world
@@ -214,6 +225,7 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Interactions and caveats:**
   - `?flair=0` turns all of them off, including the hawk and the flying saucer. The hawk can take the bird, so `?flair=0` also removes that risk.
   - The flying saucer only appears at night, and does not appear with `?noclock`.
+  - `?flair=0` also turns off the July 4th fireworks (see `fireworks`).
 
 ### `trap`
 

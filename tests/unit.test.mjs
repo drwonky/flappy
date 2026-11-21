@@ -473,3 +473,106 @@ describe("determinism", () => {
     assert.equal(trace(), trace());
   });
 });
+
+describe("July 4th fireworks", () => {
+  // the shows of a run: [start, length] in game seconds, seen from the outside (the `fireworks` state)
+  const shows = (search, secs, seed = 3) => {
+    const g = loadGame({ search, seed }), out = []; let t0 = null;
+    g.run(secs, i => { const on = !!g.ev("fireworks"); if (on && t0 === null) t0 = i / 120; if (!on && t0 !== null) { out.push([t0, i / 120 - t0]); t0 = null; } });
+    return { g, out };
+  };
+  it("puts July 4th early in summer: day 185, the cycle starting at the March equinox", () => {
+    const g = loadGame({ search: "?season=0" });
+    near(g.ev("FW.at") * 4 * 28, 32.5, 0.05, "seconds into the year");
+    assert.equal(g.ev("yearFrac(79)"), 0);
+    near(g.ev("yearFrac(79 + 365 / 4)"), 0.25, 1e-9);
+  });
+  it("starts exactly one show a year, at the July 4th point, for about 10 s", () => {
+    const { g, out } = shows("?season=0", 112);
+    assert.equal(out.length, 1, JSON.stringify(out));
+    near(out[0][0], g.ev("FW.at * 4 * SEASON.len"), 1 / 60, "start");
+    assert.ok(out[0][1] >= 9.5 && out[0][1] <= 11, `lasts ${out[0][1]} s`);
+    assert.equal(g.ev("fwShows"), 1);
+  });
+  it("starts two in two years, and none with ?flair=0", () => {
+    assert.equal(shows("?season=0", 224).out.length, 2);
+    const { g, out } = shows("?season=0&flair=0", 112);
+    assert.equal(out.length, 0); assert.equal(g.ev("fwShows"), 0);
+    assert.equal(shows("?season=0&flair=0&fireworks", 5).out.length, 0);
+  });
+  it("is not fooled by the wrap, a big step or a change of pace (DISCO)", () => {
+    const g = loadGame({ search: "?season=3" });
+    g.ev("seasonT = 4 * SEASON.len - 0.001; stepFireworks(1, 0)");   // through the wrap, past nothing
+    g.ev("stepSeason(0.01); stepFireworks(0.01, 0)");
+    assert.equal(g.ev("fwShows"), 0);
+    g.ev("seasonT = FW.at * 4 * SEASON.len - 0.5; stepFireworks(0, 0); stepSeason(2); stepFireworks(2, 0)");   // one step right over it
+    assert.equal(g.ev("fwShows"), 1);
+    g.ev("fireworks = null; stepSeason(1); stepFireworks(1, 0)");
+    assert.equal(g.ev("fwShows"), 1);
+    g.ev("startDisco(); stepFireworks(0.01, 0)");                  // the same point in the year at another pace: nothing new
+    assert.equal(g.ev("fwShows"), 1);
+  });
+  it("is rained out: a storm at July 4th puts the show off until it clears (still summer), else skips it", () => {
+    const g = loadGame({ search: "?season=1&seasonlen=60" });   // a long summer, with the storm window inside it
+    g.ev("TSTORM.dur = 12");
+    // a storm over the trigger, clearing well before summer ends
+    g.ev("const [s0, d] = stormWindow(); globalThis.__w = [s0, d]; seasonT = FW.at * 4 * SEASON.len - 0.01; fwPrev = seasonT / (4 * SEASON.len); ts.I = 0.8; ts.on = true; stepSeason(0.02); stepFireworks(0.02, 0)");
+    assert.equal(g.ev("fwShows"), 0); assert.equal(g.ev("fwWait"), true);
+    g.ev("ts.I = 0.5; stepFireworks(1, 0)"); assert.equal(g.ev("fwShows"), 0, "still raining");
+    g.ev("ts.I = 0.1; seasonT = Math.min(seasonT, stormWindow()[0] - 1); stepFireworks(1, 0)");
+    assert.equal(g.ev("fwShows"), 1); assert.equal(g.ev("fwWait"), false);
+    // a storm that outlasts the summer: no show this year
+    const h = loadGame({ search: "?season=1" });
+    h.ev("seasonT = FW.at * 4 * SEASON.len - 0.01; fwPrev = seasonT / (4 * SEASON.len); ts.I = 0.8; stepSeason(0.02); stepFireworks(0.02, 0)");
+    assert.equal(h.ev("fwWait"), true);
+    h.ev("seasonT = SEASON.len * 2 + 0.5; stepSeason(0.01); ts.I = 0.8; stepFireworks(0.01, 0)");   // autumn now, the storm still on
+    assert.equal(h.ev("fwWait"), false); assert.equal(h.ev("fwShows"), 0);
+    h.ev("ts.I = 0; stepFireworks(1, 0)"); assert.equal(h.ev("fwShows"), 0);
+    // ?fireworks goes ahead in any weather
+    const k = loadGame({ search: "?season=1&fireworks" });
+    k.ev("ts.I = 0.9; ts.on = true; stepFireworks(1.1, 0)"); assert.equal(k.ev("fwShows"), 1);
+  });
+  it("starts one with ?fireworks, a second in", () => {
+    const { g, out } = shows("?season=0&fireworks", 20);
+    assert.equal(out.length, 1);
+    near(out[0][0], 1, 0.02, "start");
+    near(out[0][1], 10, 0.5, "length");
+    assert.ok(g.ev("fwN") === 0, "sparks left");
+  });
+  it("launches singles, a middle and a finale of 9-12, stays under the spark cap and draws", () => {
+    const g = loadGame({ search: "?season=0&fireworks" });
+    let peak = 0, bursts = [];
+    g.ev("fwBurst = (f => s => { globalThis.__b(s.t); return f(s); })(fwBurst)");
+    globalThis.__b = () => bursts.push(g.ev("fireworks ? fireworks.t : 10"));
+    g.run(12, i => { peak = Math.max(peak, g.ev("fwN")); if (i % 8 === 0) g.ev("drawFireworks()"); });
+    globalThis.__b = () => {};
+    assert.ok(peak > 100 && peak <= 600, `peak ${peak}`);
+    assert.ok(bursts.length >= 15 && bursts.length <= 40, `${bursts.length} shells`);
+    const fin = bursts.filter(t => t > 8.3);
+    assert.ok(fin.length >= 8, `finale of ${fin.length}`);
+    assert.ok(bursts.filter(t => t < 3.5).length <= 4, "the opening is a few single shells");
+    for (const k of [0, 1, 2, 3, 4, 5, 6]) {                      // every kind of burst draws and dies away
+      g.ev(`fwN = 0; fwBurst({ x1: 100, y1: 150, kind: ${k}, c0: 0, c1: 2, fin: false }); fwBurst({ x1: 100, y1: 150, kind: ${k}, c0: 3, c1: 3, fin: true })`);
+      assert.ok(g.ev("fwN") > 3);
+      g.run(3, i => { if (i % 24 === 0) g.ev("drawFireworks()"); });
+      assert.equal(g.ev("fwN"), 0, `kind ${k}`);
+    }
+  });
+  it("never changes the game: the same seed plays the same with and without a show", () => {
+    const play = search => {
+      const g = loadGame({ search, seed: 21 }), s = [];
+      g.run(28, i => { if (i % 240 === 0) s.push(g.ev("[score, bird.y, stats.runs, dead, pipes.length]").join(",")); });
+      return { s: s.join("|"), shows: g.ev("fwShows") };
+    };
+    const a = play("?season=0"), b = play("?season=0&fireworks");
+    assert.equal(a.shows, 0); assert.equal(b.shows, 1);
+    assert.equal(a.s, b.s);
+  });
+  it("keeps the game's Math.random out of it", () => {
+    const g = loadGame({ search: "?season=0&fireworks" }); let n = 0;
+    g.ev("Math.random = (f => () => { globalThis.__r++; return f(); })(Math.random)"); globalThis.__r = 0;
+    const base = (() => { const h = loadGame({ search: "?season=0" }); let c = 0; h.ev("Math.random = (f => () => { globalThis.__r2++; return f(); })(Math.random)"); globalThis.__r2 = 0; h.run(12); return globalThis.__r2; })();
+    g.run(12); n = globalThis.__r; delete globalThis.__r; delete globalThis.__r2;
+    assert.equal(n, base);
+  });
+});

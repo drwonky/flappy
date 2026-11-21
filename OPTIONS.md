@@ -66,7 +66,7 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Interactions and caveats:**
   - With WebGL, all six styles work.
   - With `?2d` (or when WebGL is not available), the scanlines are a plain canvas overlay that only ever draws `lines`. `soft` and `grille` look the same as `lines` there, and so do `delta` and `slot` (`SCAN_STYLE` reports `lines`). `off` removes them.
-  - `delta` and `slot` draw the CRT picture at a whole number of screen pixels per game pixel (2, 3, 4...), so every beam and dot has the same shape. How that picture meets the window is set by [`crtfit`](#crtfit): by default it is resized smoothly to fill the window. Below 2 screen pixels per game pixel there is no room for a beam, and they fall back to a gentle alternate-row shading with the same dots.
+  - `delta` and `slot` draw one scanline beam per game row and a phosphor mask on the screen's own pixels. How the picture meets the window is set by [`crtfit`](#crtfit): by default it fills the window. Below 2 screen pixels per game pixel there is no room for a beam, and they fall back to a gentle alternate-row shading with the same dots.
   - The shake moves the picture under the beams and the mask, which stay fixed to the screen.
 
 ### `bloom`
@@ -83,7 +83,7 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Syntax:** `?crtfit=fill` or `?crtfit=exact`
 - **Default:** `fill`.
 - **What it does:** Sets how the `delta` and `slot` scanlines fit a window that is not an exact multiple of the game's size.
-  - `fill` draws the CRT picture offscreen at the next whole scale up (every game pixel exactly k x k screen pixels), then shrinks it smoothly to fill the window. No borders and no uneven rows. The picture is a touch softer, like a real tube.
+  - `fill` fills the window at its true scale. The beams and the phosphor mask are worked out for each screen pixel: the mask columns sit on the screen's own pixel grid, each pixel takes its share of the scanline beams either side of it, and the mask's rows follow the game's rows, so nothing is resampled and there is no moire.
   - `exact` puts the picture on the screen at exactly k x k screen pixels per game pixel. Every dot is pixel-perfect, but it leaves black bars around the picture unless the window is close to a whole multiple. When the next scale up only crops 3% or less at the edges, it uses that scale and crops, like a TV's overscan.
 - **Example:** `flappy-seasons.html?scan=slot&crtfit=exact`
 - **Interactions and caveats:** Only matters for `?scan=delta` and `?scan=slot` with WebGL. The other scanline styles always fill the window.

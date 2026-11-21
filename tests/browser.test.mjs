@@ -162,17 +162,41 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     }
   });
 
-  it("fills the window with delta and slot by default (crtfit=fill): made at whole px offscreen, resized smoothly", async () => {
-    for (const [q, view] of [["?scan=delta", { width: 1280, height: 800, dpr: 2 }], ["?scan=slot&tvs", { width: 1440, height: 900, dpr: 1 }]]) {
+  it("fills the window with delta and slot by default (crtfit=fill): the beams and mask worked out at the true scale", async () => {
+    for (const [q, view] of [["?scan=delta", { width: 1280, height: 800, dpr: 2 }], ["?scan=slot&tvs", { width: 1440, height: 900, dpr: 1 }],
+                             ["?scan=slot", { width: 390, height: 844, dpr: 2.75, mobile: true }]]) {
       const p = await open(q, view, 800);
       try {
-        const r = await p.ev(`({ fit: CRT_FIT, k: DS, W, H, pic: GLR.pic(), cw: GLR.cv.width, ch: GLR.cv.height })`);
+        const r = await p.ev(`({ fit: CRT_FIT, pic: GLR.pic(), cw: GLR.cv.width, ch: GLR.cv.height })`);
         const lab = `${q} at ${view.width}x${view.height}@${view.dpr}`;
         assert.equal(r.fit, "fill");
-        assert.ok(r.pic.fill, `${lab}: not drawn offscreen`);
-        assert.ok(Number.isInteger(r.k) && r.pic.w === r.W * r.k && r.pic.h === r.H * r.k, `${lab}: the offscreen picture is not whole px per game px`);
-        assert.ok(r.pic.w >= r.cw - 1 && r.pic.h >= r.ch - 1, `${lab}: made smaller than the screen (${r.pic.w}x${r.pic.h} for ${r.cw}x${r.ch})`);
+        assert.ok(r.pic.fill, `${lab}: not in fill mode`);
+        assert.ok(r.pic.w === r.cw && r.pic.h === r.ch && r.pic.x === 0 && r.pic.y === 0, `${lab}: the picture does not fill the canvas`);
         await healthy(p, lab);
+      } finally { await p.close(); }
+    }
+  });
+
+  it("draws delta and slot with no moire at a fractional scale: a flat colour stays flat", async () => {
+    // a beat between the mask or the beams and the screen's pixel grid shows up as slow bands; averaged
+    // over whole groups of rows (or columns) a flat field must come out the same everywhere
+    for (const [q, view] of [["?scan=delta&bloom=0", { width: 390, height: 844, dpr: 2.75, mobile: true }], ["?scan=slot&bloom=0", { width: 390, height: 844, dpr: 2.75, mobile: true }]]) {
+      const p = await open(q, view, 800);
+      try {
+        const r = await p.ev(`new Promise(res => { window.requestAnimationFrame = () => 0; setTimeout(() => {
+          ctx.fillStyle = "#7fb0e0"; ctx.globalAlpha = 1; ctx.fillRect(0, 0, W, H); GLR.present(0, 0);
+          const g = GLR.gl, w = GLR.cv.width, h = GLR.cv.height, a = new Uint8Array(w * h * 4);
+          g.bindFramebuffer(g.FRAMEBUFFER, null); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, a);
+          const L = (x, y) => { const i = (y * w + x) * 4; return a[i] * .299 + a[i + 1] * .587 + a[i + 2] * .114; };
+          const x0 = w >> 2, x1 = x0 + (w >> 1), y0 = h >> 2, y1 = y0 + (h >> 1), rows = [];
+          for (let y = y0; y < y1; y++) { let t = 0; for (let x = x0; x < x1; x++) t += L(x, y); rows.push(t / (x1 - x0)); }
+          const k = Math.round(DS * 12), env = [];
+          for (let i = 0; i + k <= rows.length; i += 3) { let t = 0; for (let j = i; j < i + k; j++) t += rows[j]; env.push(t / k); }
+          res({ lo: Math.min(...env), hi: Math.max(...env), ds: DS });
+        }, 200); })`);
+        const lab = `${q} at DS ${r.ds.toFixed(2)}`;
+        assert.ok((r.hi - r.lo) / r.hi < 0.03, `${lab}: rows beat from ${r.lo.toFixed(1)} to ${r.hi.toFixed(1)}`);
+        assert.deepEqual(p.errors, []);
       } finally { await p.close(); }
     }
   });

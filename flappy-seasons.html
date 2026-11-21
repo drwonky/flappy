@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r36</div>
+<div id="hud">seasons r37</div>
 
 <script>
 "use strict";
@@ -1914,11 +1914,12 @@ const SPR_ZAP = { K: "#fffbe0", Y: "#2a2f7a", D: "#151845", C: "#3a4290", W: "#f
    R = 1. ?fps shows timings.
    With WebGL (the default) ctx is GLCtx below: the same calls as a 2D canvas, batched into
    one vertex buffer and drawn into an offscreen framebuffer, then a last shader pass puts
-   it on screen with the scanlines (?scan=lines|soft|grille|off). Without WebGL, with ?2d,
+   it on screen with the scanlines (?scan=lines|soft|grille|delta|slot|off) and a bloom. Without WebGL, with ?2d,
    or if the GL context is lost, the scene is painted straight into the visible canvas and
    the scanlines are a canvas over it. */
 const cvs = document.getElementById("game"), scan = document.getElementById("scan");
-const SCAN_STYLE = (/[?&]scan=(lines|soft|grille|off)(&|$)/.exec(location.search) || [0, "lines"])[1];
+let SCAN_STYLE = (/[?&]scan=(lines|soft|grille|delta|slot|off)(&|$)/.exec(location.search) || [0, "lines"])[1];   // (the effective one: delta and slot need WebGL)
+let BLOOM = (m => m ? Math.max(0, Math.min(4, +m[1] || 0)) : (SCAN_STYLE === "delta" || SCAN_STYLE === "slot" ? 1 : 0))(/[?&]bloom=([0-9.]+)(&|$)/.exec(location.search));   // glow strength: 1 for delta/slot, 0 elsewhere; 2D has none
 const FORCE2D = /[?&]2d(=|&|$)/.test(location.search);
 
 /* GLCtx: the slice of CanvasRenderingContext2D the game uses, drawn with WebGL. Every rect, text
@@ -1943,15 +1944,52 @@ function makeGL(gl, cv) {
         "void main(){float t=clamp((distance(v_pos,u_c)-u_r.x)/(u_r.y-u_r.x),0.,1.);gl_FragColor=texture2D(u_ramp,vec2(t,.5))*u_a;}",
     vq: "attribute vec2 a_pos;void main(){gl_Position=vec4(a_pos,0.,1.);}",
     fq: "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
-        "uniform sampler2D u_scene;uniform vec2 u_out;uniform vec2 u_shake;uniform int u_mode;uniform float u_O;" +
+        "uniform sampler2D u_scene;uniform sampler2D u_bloom;uniform vec2 u_out;uniform vec2 u_shake;uniform int u_mode;uniform float u_O;" +
+        "uniform vec2 u_bs,u_pic,u_off;uniform float u_ds,u_bk,u_pw,u_ph,u_sh,u_boost,u_dark;" +
+        "float luma(vec3 c){return dot(c,vec3(.299,.587,.114));}" +
+        "float erfa(float x){float t=1.128379*x+.1008*x*x*x;return 1.-2./(exp(2.*t)+1.);}" +
+        "vec3 shoulder(vec3 x){vec3 e=max(x-.7,0.);return min(x,vec3(.7))+.3*(1.-exp(-e/.3));}" +
         "void main(){" +
-        "vec2 f=gl_FragCoord.xy;float yt=u_out.y-f.y;vec2 s=vec2(f.x-u_shake.x,yt-u_shake.y);vec3 c=vec3(0.);" +
-        "if(s.x>=0.&&s.y>=0.&&s.x<u_out.x&&s.y<u_out.y)c=texture2D(u_scene,vec2(s.x/u_out.x,1.-s.y/u_out.y)).rgb;" +
+        "vec2 f=gl_FragCoord.xy;float yt=u_out.y-f.y;float py=yt-u_off.y,px=f.x-u_off.x;vec2 s=vec2(px-u_shake.x,py-u_shake.y);vec3 c=vec3(0.);" +
+        "bool crt=u_mode>=4;float fy=0.;" +
+        // the beams belong to the screen, the picture moves under them: one screen row samples one picture row
+        "if(crt&&u_ds>2.99){float r=floor(py/u_ds);fy=py/u_ds-r-.5;s.y=(r+.5)*u_ds-u_shake.y;}" +
+        "vec2 uv=vec2(s.x/u_pic.x,1.-s.y/u_pic.y);" +
+        "bool in_=s.x>=0.&&s.y>=0.&&s.x<u_pic.x&&s.y<u_pic.y;" +
+        "if(in_){c=texture2D(u_scene,uv).rgb;if(u_bk>0.)c+=texture2D(u_bloom,uv*u_bs).rgb*u_bk;}" +
         "float row=floor(yt);" +
         "if(u_mode==1){if(mod(row,u_O)<.5)c*=.85;}" +
         "else if(u_mode==2){c*=1.-.12*(.5+.5*cos(6.2831853*(yt-.5)/u_O));}" +
         "else if(u_mode==3){if(mod(row,u_O)<.5)c*=.85;float k=mod(floor(f.x),3.);vec3 m=vec3(k<.5?1.:.9,k>.5&&k<1.5?1.:.9,k>1.5?1.:.9);c*=m;}" +
+        "else if(crt){" +
+          "float l=clamp(luma(c),0.,1.);" +
+          "if(u_ds<2.99){c*=1.-mix(.30,.08,l)*mod(row,2.);}" +      // a row is 1-2 px: a gentle, fixed alternate-row shade
+          "else{float sg=mix(.18,.42,l);float a=sg*2.5066283*erfa(.5/(sg*1.4142136));c*=exp(-fy*fy/(2.*sg*sg))/a;}" +
+          "vec3 m;float x=px;" +
+          "if(u_mode==4){float g=floor(py/u_ph);x+=mod(g,2.)*1.5*u_pw;float k=mod(floor(x/u_pw),3.);" +
+            "m=vec3(k<.5?1.:u_dark,k>.5&&k<1.5?1.:u_dark,k>1.5?1.:u_dark);}" +
+          "else{float k=mod(floor(x/u_pw),3.);float t=floor(x/(3.*u_pw));float y=py+mod(t,2.)*floor(u_sh*.5);" +
+            "m=vec3(k<.5?1.:u_dark,k>.5&&k<1.5?1.:u_dark,k>1.5?1.:u_dark);if(mod(y,u_sh+1.)>=u_sh)m*=.35;}" +
+          "c=shoulder(c*m*u_boost);" +
+        "}" +
         "gl_FragColor=vec4(c,1.);}",
+    // crtfit=fill: the CRT picture, made at whole px per game px, resized smoothly to the screen
+    fc: "precision mediump float;uniform sampler2D u_scene;uniform vec2 u_out;void main(){gl_FragColor=vec4(texture2D(u_scene,gl_FragCoord.xy/u_out).rgb,1.);}",
+    // bloom: the bright part of the scene, taken from 4x4 logical px a texel (one tap each), then a 9-tap gaussian in two passes
+    fh: "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
+        "uniform sampler2D u_scene;uniform vec2 u_msz;uniform vec2 u_dir;uniform float u_mode;varying vec2 v_pos;" +
+        "void main(){" +
+        "vec2 uv=gl_FragCoord.xy;" +
+        "if(u_mode<.5){vec3 s=vec3(0.);for(int j=0;j<4;j++)for(int i=0;i<4;i++){" +
+          "vec3 c=texture2D(u_scene,(floor(uv)*4.+vec2(float(i),float(j))+.5)/u_msz).rgb;" +
+          "float l=dot(c,vec3(.299,.587,.114));float q=clamp(l-.6+.15,0.,.3);q=q*q/.6;float w=max(q,l-.6);" +
+          "s+=c*(w/max(l,.001));}" +
+          "gl_FragColor=vec4(s/16.,1.);}" +
+        "else{vec2 d=u_dir;vec2 p=uv/u_msz;" +
+          "vec3 c=texture2D(u_scene,p).rgb*.2270270270;" +
+          "c+=(texture2D(u_scene,p+d*1.3846153846).rgb+texture2D(u_scene,p-d*1.3846153846).rgb)*.3162162162;" +
+          "c+=(texture2D(u_scene,p+d*3.2307692308).rgb+texture2D(u_scene,p-d*3.2307692308).rgb)*.0702702703;" +
+          "gl_FragColor=vec4(c,1.);}}",
     // the shadow mask: x y in logical px, r g b a straight to the target (max-blended)
     vk: "attribute vec2 a_pos;attribute vec4 a_col;uniform vec2 u_inv;varying vec4 v_col;" +
         "void main(){gl_Position=vec4(a_pos.x*u_inv.x-1.,a_pos.y*u_inv.y-1.,0.,1.);v_col=a_col;}",
@@ -1986,12 +2024,12 @@ function makeGL(gl, cv) {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     const u = {};
-    for (const n of ["u_inv", "u_atlas", "u_c", "u_r", "u_a", "u_ramp", "u_scene", "u_out", "u_shake", "u_mode", "u_O",
-                     "u_mask", "u_msz", "u_R", "u_style", "u_k", "u_tint", "u_sky", "u_skyH", "u_rmax", "u_con", "u_b0", "u_b1", "u_nb"]) u[n] = gl.getUniformLocation(p, n);
+    for (const n of ["u_inv", "u_atlas", "u_c", "u_r", "u_a", "u_ramp", "u_scene", "u_out", "u_pic", "u_off", "u_shake", "u_mode", "u_O",
+                     "u_bloom", "u_bs", "u_ds", "u_bk", "u_pw", "u_ph", "u_sh", "u_boost", "u_dark", "u_dir", "u_mask", "u_msz", "u_R", "u_style", "u_k", "u_tint", "u_sky", "u_skyH", "u_rmax", "u_con", "u_b0", "u_b1", "u_nb"]) u[n] = gl.getUniformLocation(p, n);
     return { p, u };
   };
   const PM = prog(SRC.vm, SRC.fm, ["a_pos", "a_uv", "a_col"]), PS = prog(SRC.vp, SRC.fs, ["a_pos"]);
-  const PG = prog(SRC.vp, SRC.fg, ["a_pos"]), PQ = prog(SRC.vq, SRC.fq, ["a_pos"]);
+  const PG = prog(SRC.vp, SRC.fg, ["a_pos"]), PQ = prog(SRC.vq, SRC.fq, ["a_pos"]), PH = prog(SRC.vq, SRC.fh, ["a_pos"]), PC = prog(SRC.vq, SRC.fc, ["a_pos"]);
   const SK = prog(SRC.vk, SRC.fk, ["a_pos", "a_col"]), SA = prog(SRC.vp, SRC.fa, ["a_pos"]);
 
   /* buffers: the quad batch (20 bytes a vertex: x y u v, premultiplied rgba), its static index
@@ -2063,7 +2101,11 @@ function makeGL(gl, cv) {
 
   /* the scene: an offscreen RGBA texture + depth/stencil, bw x bh scene pixels */
   const sceneTex = tex(gl.NEAREST), sceneRb = gl.createRenderbuffer(), fb = gl.createFramebuffer();
-  let bw = 1, bh = 1, cw_ = 1, ch_ = 1, kdev = 1, scanO = 3, scanMode = 1;
+  let bw = 1, bh = 1, cw_ = 1, ch_ = 1, picW_ = 1, picH_ = 1, offX_ = 0, offY_ = 0, fill_ = false, tW = 1, tH = 1, kpic = 1, crtTex = null, crtFb = null, crtW = 0, crtH = 0, kdev = 1, scanO = 3, scanMode = 1;
+  let scDS = 3, scPW = 1, scPH = 1, scSH = 3, scBoost = 1.5, scDark = .5;      // the CRT styles, in canvas px
+  /* bloom: two small ping-pong targets at a quarter of the logical size (made in resizeScene) */
+  let blW = 1, blH = 1;
+  const blTex = [tex(gl.LINEAR), tex(gl.LINEAR)], blFb = [gl.createFramebuffer(), gl.createFramebuffer()];
   const buf = { width: 1, height: 1, toDataURL(type) {
     flush();
     const px = new Uint8Array(bw * bh * 4), out = new Uint8ClampedArray(bw * bh * 4);
@@ -2090,6 +2132,14 @@ function makeGL(gl, cv) {
     gl.clearColor(0, 0, 0, 0); gl.colorMask(true, true, true, true); gl.stencilMask(0xFF); gl.disable(gl.SCISSOR_TEST);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
     clipOn = false;
+    blW = Math.max(1, Math.ceil(W / 4)); blH = Math.max(1, Math.ceil(H / 4));
+    for (let i = 0; i < 2; i++) {
+      gl.bindTexture(gl.TEXTURE_2D, blTex[i]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, blW, blH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blFb[i]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, blTex[i], 0);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   }
 
   /* ---- batching ---- */
@@ -2430,29 +2480,94 @@ function makeGL(gl, cv) {
   }
 
   /* ---- the last pass: the scene up to the screen (nearest-neighbour), shaken, with scanlines ---- */
+  function bloomPass() {                            // scene -> bright 1/4 size -> blur across -> blur down (all tiny)
+    const u = PH.u;
+    gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST);
+    gl.useProgram(PH.p); bindPos(fbo_tri);
+    gl.uniform1i(u.u_scene, 0); gl.activeTexture(gl.TEXTURE0);
+    gl.viewport(0, 0, blW, blH);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, blFb[0]); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.uniform1f(u.u_mode, 0); gl.uniform2f(u.u_msz, bw / gR, bh / gR);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.uniform1f(u.u_mode, 1); gl.uniform2f(u.u_msz, blW, blH);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, blFb[1]); gl.bindTexture(gl.TEXTURE_2D, blTex[0]);
+    gl.uniform2f(u.u_dir, 1 / blW, 0); gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, blFb[0]); gl.bindTexture(gl.TEXTURE_2D, blTex[1]);
+    gl.uniform2f(u.u_dir, 0, 1 / blH); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
   function present(shx, shy) {
     flush();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, cw_, ch_);
+    const bk = BLOOM;
+    if (bk > 0) bloomPass();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fill_ ? crtFb : null);
+    gl.viewport(0, 0, tW, tH);
     gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST);
     gl.useProgram(PQ.p);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
-    gl.uniform1i(PQ.u.u_scene, 0); gl.uniform2f(PQ.u.u_out, cw_, ch_);
-    gl.uniform2f(PQ.u.u_shake, shx * kdev, shy * kdev); gl.uniform1i(PQ.u.u_mode, scanMode); gl.uniform1f(PQ.u.u_O, scanO);
+    gl.uniform1i(PQ.u.u_scene, 0); gl.uniform2f(PQ.u.u_out, tW, tH); gl.uniform2f(PQ.u.u_pic, picW_, picH_); gl.uniform2f(PQ.u.u_off, offX_, offY_);
+    const crt = scanMode >= 4; gl.uniform2f(PQ.u.u_shake, crt ? Math.round(shx * kpic) : shx * kpic, crt ? Math.round(shy * kpic) : shy * kpic); gl.uniform1i(PQ.u.u_mode, scanMode); gl.uniform1f(PQ.u.u_O, scanO);
+    gl.uniform1f(PQ.u.u_ds, scDS); gl.uniform1f(PQ.u.u_bk, bk); gl.uniform1f(PQ.u.u_pw, scPW); gl.uniform1f(PQ.u.u_ph, scPH);
+    gl.uniform1f(PQ.u.u_sh, scSH); gl.uniform1f(PQ.u.u_boost, scBoost); gl.uniform1f(PQ.u.u_dark, scDark);
+    gl.uniform1i(PQ.u.u_bloom, 1); gl.uniform2f(PQ.u.u_bs, bw / gR / (blW * 4), bh / gR / (blH * 4)); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blTex[0]); gl.activeTexture(gl.TEXTURE0);
     bindPos(fbo_tri);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, null); gl.activeTexture(gl.TEXTURE0);
+    if (fill_) {                                    // ...then smoothly onto the whole screen
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, cw_, ch_);
+      gl.useProgram(PC.p); gl.uniform1i(PC.u.u_scene, 0); gl.uniform2f(PC.u.u_out, cw_, ch_);
+      gl.bindTexture(gl.TEXTURE_2D, crtTex);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.viewport(0, 0, bw, bh);
     gl.enable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_2D, atlas);
   }
-  function size(devW, devH, ds) {                   // the screen-sized canvas: device px, but never more than ~8 Mpx
+  function size(devW, devH, ds, picW, picH, fill) {     // the screen-sized canvas: device px, but never more than ~8 Mpx;
+    // picW x picH: the picture inside it (the CRT styles: whole device px per game px, centred, cropped like a TV's overscan or with black bars)
     const k = devW * devH > 8.3e6 ? Math.sqrt(8.3e6 / (devW * devH)) : 1;
     const w = Math.max(1, Math.floor(devW * k)), h = Math.max(1, Math.floor(devH * k));
     if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; gl.viewport(0, 0, bw, bh); }   // (resizing the canvas resets the viewport)
     cw_ = w; ch_ = h; kdev = w / devW;
+    fill_ = !!(fill && picW);
+    if (fill_) {                                    // the CRT pass draws offscreen, picW x picH, and is resized to the screen
+      if (!crtTex) { crtTex = tex(gl.LINEAR); crtFb = gl.createFramebuffer(); }
+      if (crtW !== picW || crtH !== picH) {
+        crtW = picW; crtH = picH;
+        gl.bindTexture(gl.TEXTURE_2D, crtTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, picW, picH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, crtFb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, crtTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.bindTexture(gl.TEXTURE_2D, atlas);
+      }
+      tW = picW_ = picW; tH = picH_ = picH; offX_ = offY_ = 0; kpic = picW / devW;
+    } else {
+      picW_ = picW ? picW * kdev : w; picH_ = picH ? picH * kdev : h;
+      offX_ = Math.floor((w - picW_) / 2); offY_ = Math.floor((h - picH_) / 2);
+      tW = w; tH = h; kpic = kdev;
+    }
     scanO = Math.max(3, Math.round(1.5 * ds * kdev));
-    scanMode = { off: 0, lines: 1, soft: 2, grille: 3 }[SCAN_STYLE];
+    scanMode = { off: 0, lines: 1, soft: 2, grille: 3, delta: 4, slot: 5 }[SCAN_STYLE];
+    // the CRT styles: the beam is one logical row tall, the phosphors are device px
+    // (fit() makes delta/slot a whole number of device px per logical px, k >= 2, so every row and cell is alike)
+    scDS = fill_ ? ds : ds * kdev;
+    const kk = Math.max(1, Math.floor(scDS + 1e-6));
+    scPW = Math.max(1, Math.floor(kk / 3)); scPH = scPW;
+    scSH = (kk >= 3 ? kk : 2 * kk) - 1;             // a slot and its 1 px gap are one logical row tall (two when a row is 2 px)
+    scDark = scDS < 2.99 ? .68 : .5;                 // gentler where a phosphor is one px
+    const dk = scDark, avg = (1 + 2 * dk) / 3;       // average loss of the mask, made up for with a boost
+    scBoost = 1 / (scanMode === 5 ? avg * (scSH + .35) / (scSH + 1) : avg);
+  }
+  function screenDataURL(x, y, w, h) {             // a piece of what present() put on the screen canvas (x, y from the top left), for the tests; call right after draw()
+    const prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    w = Math.min(w, cw_ - x); h = Math.min(h, ch_ - y);
+    const px = new Uint8Array(w * h * 4), out = new Uint8ClampedArray(w * h * 4);
+    gl.readPixels(x, ch_ - y - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prev);
+    for (let r = 0; r < h; r++) out.set(px.subarray((h - 1 - r) * w * 4, (h - r) * w * 4), r * w * 4);
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    c.getContext("2d").putImageData(new ImageData(out, w, h), 0, 0);
+    return c.toDataURL("image/png");
   }
   function clearText() { flush(); atlasReset(); }
 
@@ -2460,7 +2575,8 @@ function makeGL(gl, cv) {
   gl.clearColor(0, 0, 0, 0);
   resizeScene(Math.max(1, W), Math.max(1, H), 1);
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("framebuffer incomplete");
-  return { gl, cv, ctx: X, buf, resizeScene, size, present, clearText, shadowBegin, shadowEnd, shadowApply, mq, mqb, maskOK };
+  const pic = () => ({ w: picW_, h: picH_, x: offX_, y: offY_, fill: fill_ });   // where the picture sits in the canvas (tests)
+  return { pic, gl, cv, ctx: X, buf, resizeScene, size, present, screenDataURL, clearText, shadowBegin, shadowEnd, shadowApply, mq, mqb, maskOK };
 }
 let GLR = null, RENDERER = "2D";
 if (!FORCE2D && window.WebGLRenderingContext) {
@@ -2476,6 +2592,7 @@ if (!FORCE2D && window.WebGLRenderingContext) {
     }
   } catch (e) { GLR = null; }
 }
+if (!GLR) { BLOOM = 0; if (SCAN_STYLE === "delta" || SCAN_STYLE === "slot") SCAN_STYLE = "lines"; }
 let SHADOW_STYLE = (/[?&]shadow=(classic|dither|smooth|blocky|off)(&|$)/.exec(location.search) || [0, "dither"])[1];   // 2D has only classic and off
 if ((!GLR || !GLR.maskOK) && SHADOW_STYLE !== "off") SHADOW_STYLE = "classic";
 let buf = GLR ? GLR.buf : cvs;
@@ -2483,7 +2600,8 @@ let ctx = GLR ? GLR.ctx : cvs.getContext("2d");     // with alpha: the sky is pa
 function useCanvas2D() {                              // the GL context was lost: carry on in 2D
   if (!GLR) return;
   const gc = GLR.cv;
-  GLR = null; RENDERER = "2D";
+  GLR = null; RENDERER = "2D"; BLOOM = 0;
+  if (SCAN_STYLE === "delta" || SCAN_STYLE === "slot") SCAN_STYLE = "lines";
   if (SHADOW_STYLE !== "off") SHADOW_STYLE = "classic";
   if (gc.parentNode) gc.parentNode.removeChild(gc);
   cvs.style.display = ""; scan.style.display = "";
@@ -2521,6 +2639,8 @@ function txt(s, x, y, col, font, align) {
 }
 
 
+const CRT_FIT = /[?&]crtfit=exact(&|$)/.test(location.search) ? "exact" : "fill";   // delta/slot: fill the screen, or whole px with bars
+const CRT_OVERSCAN = 0.03;                            // delta/slot may crop up to this much of the picture to scale by whole px
 function fit() {
   // The stage is whatever space CSS leaves between the gutters and the caption,
   // so this works the same on phones, in iframes and with the address bar moving.
@@ -2528,11 +2648,28 @@ function fit() {
   if (box.width < 1 || box.height < 1) return;
   const dpr = devicePixelRatio || 1;
   DS = Math.min(box.width / W, box.height / H) * dpr;
-  const devW = Math.max(1, Math.floor(W * DS)), devH = Math.max(1, Math.floor(H * DS));
+  let devW = Math.max(1, Math.floor(W * DS)), devH = Math.max(1, Math.floor(H * DS));
   DS = Math.min(devW / W, devH / H);
+  let picW = 0, picH = 0;
+  if (GLR && (SCAN_STYLE === "delta" || SCAN_STYLE === "slot")) {
+    // the CRT styles want whole device px per game px. The picture is W*k x H*k inside the usual
+    // canvas: one size up if that only loses a few % at the edges (a TV's overscan), else one
+    // down with thin black bars - never the 25% a plain round-down can cost
+    let k = Math.floor(DS + 1e-6);
+    if (CRT_FIT === "fill" ? k < DS - 1e-6 : DS / (k + 1) >= 1 - CRT_OVERSCAN) k++;   // fill: one up and shrink it smoothly
+    while (k > 1 && W * k * H * k > 8.3e6) k--;
+    if (k >= 2) { picW = W * k; picH = H * k; DS = k; }
+  }
   DPR = dpr;
   for (const c of GLR ? [GLR.cv] : [cvs, scan]) { c.style.width = (devW / dpr) + "px"; c.style.height = (devH / dpr) + "px"; }
-  if (GLR) GLR.size(devW, devH, DS);
+  if (GLR) {
+    GLR.size(devW, devH, DS, picW, picH, CRT_FIT === "fill");
+    GLR.cv.style.transform = "";
+    if (SCAN_STYLE === "delta" || SCAN_STYLE === "slot") {   // put the canvas on a whole device px, or the browser resamples it
+      const r = GLR.cv.getBoundingClientRect(), dx = Math.round(r.left * dpr) - r.left * dpr, dy = Math.round(r.top * dpr) - r.top * dpr;
+      if (Math.abs(dx) > 1e-3 || Math.abs(dy) > 1e-3) GLR.cv.style.transform = "translate(" + dx / dpr + "px," + dy / dpr + "px)";
+    }
+  }
   else if (SCAN_STYLE === "off") scan.style.display = "none";
   else if (scan.width !== devW || scan.height !== devH) {
     // scanlines = exact device pixels at an integer period (~1.5 logical px), drawn once

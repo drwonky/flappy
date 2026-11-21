@@ -195,3 +195,52 @@ describe("GL shadow styles", { skip: chromeBin ? false : "no Chrome installed", 
     });
   }
 });
+
+// the CRT screen styles (GL only): the snapshots above are of the SCENE, taken before the last pass, so the
+// scanline beams, phosphor masks and bloom are checked here, on the screen canvas itself. A viewport where
+// the game is drawn 3 device px per game px (the whole-pixel size the delta/slot styles use), at DPR 1.
+const SCREEN_VIEW = { width: 900, height: 1700 }, SCREEN_CROP = [200, 300, 420, 420];
+const SCREEN_STYLES = [["delta", "?scan=delta"], ["slot", "?scan=slot"], ["delta-nobloom", "?scan=delta&bloom=0"], ["lines", "?scan=lines"]];
+describe("GL screen styles", { skip: chromeBin ? false : "no Chrome installed", concurrency: 1 }, () => {
+  let browser;
+  const shots = {};
+  before(async () => { browser = await launch(); fs.mkdirSync(SNAP, { recursive: true }); });
+  after(async () => { await browser?.close(); });
+
+  for (const [style, q] of SCREEN_STYLES) {
+    it(style, async t => {
+      const name = `gl-screen-${style}`;
+      const p = await browser.page({ ...SCREEN_VIEW, dpr: 1, preload: PRELOAD });
+      try {
+        await p.goto(gameUrl(q + "&season=0&hour=10&lowres&crtfit=exact"), 0);   // (exact: one device px grid to compare)
+        const png = await p.ev(`(() => {
+          if (RENDERER !== "GL") return null;
+          for (let i = 0, n = Math.round(3.5 * 120); i < n; i++) { step(1 / 120); window.__now += 1000 / 120; }
+          draw();
+          return GLR.screenDataURL(${SCREEN_CROP.join(", ")});
+        })()`);
+        if (!png) { t.skip("WebGL unavailable here"); return; }
+        assert.deepEqual(p.errors, [], "errors in the page");
+        if (style !== "lines") assert.equal(await p.ev("DS"), 3, "this viewport should give 3 device px per game px");
+        shots[style] = png;
+        const file = path.join(SNAP, name + ".png"), actual = bytes(png);
+        if (UPDATE || !fs.existsSync(file)) { fs.writeFileSync(file, actual); return; }
+        const d = await compare(p, png, dataUrl(fs.readFileSync(file)), TOL_CH);
+        if (d.size) assert.fail(`${name}: size changed from ${d.size[2]}x${d.size[3]} to ${d.size[0]}x${d.size[1]}`);
+        const pct = 100 * d.n / d.total;
+        if (pct > TOL_PCT) { writeOut(name + ".actual.png", actual); writeOut(name + ".diff.png", bytes(d.diff)); }
+        assert.ok(pct <= TOL_PCT, `${name}: ${pct.toFixed(2)}% of pixels differ by more than ${TOL_CH} (limit ${TOL_PCT}%) - see tests/out/${name}.diff.png (UPDATE_SNAPSHOTS=1 to accept)`);
+      } finally { await p.close(); }
+    });
+  }
+  it("delta differs from lines, and bloom=0 from bloom", async t => {
+    if (!shots.delta || !shots.lines || !shots["delta-nobloom"]) { t.skip("the style tests above did not run"); return; }
+    const p = await browser.page({ width: 300, height: 300 });
+    try {
+      await p.goto("about:blank", 0);
+      const a = await compare(p, shots.delta, shots.lines, 8), b = await compare(p, shots.delta, shots["delta-nobloom"], 8);
+      assert.ok(a.n > a.total * 0.3, `delta looks like lines (${a.n} of ${a.total} pixels differ)`);
+      assert.ok(b.n > 200, `bloom=0 looks like bloom (${b.n} pixels differ)`);
+    } finally { await p.close(); }
+  });
+});

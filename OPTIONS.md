@@ -56,13 +56,37 @@ Values that do not parse are ignored, and the default is used. For example `?day
 
 ### `scan`
 
-- **Syntax:** `?scan=lines`, `?scan=soft`, `?scan=grille`, or `?scan=off`
+- **Syntax:** `?scan=lines`, `?scan=soft`, `?scan=grille`, `?scan=delta`, `?scan=slot`, or `?scan=off`
 - **Default:** `lines`. Any other value is treated as `lines`.
-- **What it does:** Sets the scanline pattern laid over the picture. `lines` is thin dark lines. `soft` and `grille` are other patterns, and `off` draws no scanlines.
-- **Example:** `flappy-seasons.html?scan=grille`
+- **What it does:** Sets the scanline pattern laid over the picture.
+  - `lines` is thin dark lines. `soft` and `grille` are other patterns, and `off` draws no scanlines.
+  - `delta` imitates a shadow-mask tube, as in a small 1980s-90s colour monitor or console TV. There is one beam per game row, as on a 240p CRT: bright pixels get a fat beam that nearly fills the gap, dark pixels get a thin one with a clear dark gap. On top of that sit the phosphor dots in red, green and blue, in triads that form triangles (each band of dots is shifted half a triad from the one above). The brightness is raised to make up for the mask, and it glows (see `bloom`).
+  - `slot` imitates the slot mask or stagger block of later consumer TVs. It has the same beams, but the phosphors are tall red, green and blue slots, each followed by a thin dark gap, and every other triad is shifted down half a slot, so the gaps make a staggered brick pattern. It also glows.
+- **Example:** `flappy-seasons.html?scan=delta`
 - **Interactions and caveats:**
-  - With WebGL, all four styles work.
-  - With `?2d` (or when WebGL is not available), the scanlines are a plain canvas overlay that only ever draws `lines`. `soft` and `grille` look the same as `lines` there. `off` removes them.
+  - With WebGL, all six styles work.
+  - With `?2d` (or when WebGL is not available), the scanlines are a plain canvas overlay that only ever draws `lines`. `soft` and `grille` look the same as `lines` there, and so do `delta` and `slot` (`SCAN_STYLE` reports `lines`). `off` removes them.
+  - `delta` and `slot` draw the CRT picture at a whole number of screen pixels per game pixel (2, 3, 4...), so every beam and dot has the same shape. How that picture meets the window is set by [`crtfit`](#crtfit): by default it is resized smoothly to fill the window. Below 2 screen pixels per game pixel there is no room for a beam, and they fall back to a gentle alternate-row shading with the same dots.
+  - The shake moves the picture under the beams and the mask, which stay fixed to the screen.
+
+### `bloom`
+
+- **Syntax:** `?bloom=N`, where N is a number from 0 to 4
+- **Default:** `1` with `?scan=delta` and `?scan=slot`, `0` with the other styles.
+- **What it does:** Adds a glow around bright things (the moon, the sun, the bird's highlights, lightning, the saucer), as the light of a real tube spills over. `N` is the strength: `0` is no glow, `2` is twice as strong. The bright parts of the picture are blurred at a quarter of the game's resolution and added before the mask, so the glow shows the dots of the phosphor pattern, and it fattens bright scanlines so their gaps fill in. It costs little, because the work is done at that small size.
+- **Example:** `flappy-seasons.html?scan=delta&bloom=0.5`, or `flappy-seasons.html?scan=grille&bloom=1` to add it to another style.
+- **Interactions and caveats:**
+  - It needs WebGL. With `?2d` there is no bloom.
+
+### `crtfit`
+
+- **Syntax:** `?crtfit=fill` or `?crtfit=exact`
+- **Default:** `fill`.
+- **What it does:** Sets how the `delta` and `slot` scanlines fit a window that is not an exact multiple of the game's size.
+  - `fill` draws the CRT picture offscreen at the next whole scale up (every game pixel exactly k x k screen pixels), then shrinks it smoothly to fill the window. No borders and no uneven rows. The picture is a touch softer, like a real tube.
+  - `exact` puts the picture on the screen at exactly k x k screen pixels per game pixel. Every dot is pixel-perfect, but it leaves black bars around the picture unless the window is close to a whole multiple. When the next scale up only crops 3% or less at the edges, it uses that scale and crops, like a TV's overscan.
+- **Example:** `flappy-seasons.html?scan=slot&crtfit=exact`
+- **Interactions and caveats:** Only matters for `?scan=delta` and `?scan=slot` with WebGL. The other scanline styles always fill the window.
 
 ### `2d`
 

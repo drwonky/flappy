@@ -36,6 +36,8 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
     ["?daylen=30&hour=17", PHONE], ["?season=3&snow=200&hour=23", PHONE], ["?season=1&sand=200", PHONE],
     ["?resetstats", PHONE], ["?tvs&tod&fps", TVSIZE],
     ["?2d", PHONE], ["?2d", DESKTOP], ["?scan=soft", TVSIZE], ["?scan=grille", TVSIZE], ["?scan=off", TVSIZE], ["?2d&scan=off", PHONE],
+    ["?scan=delta", TVSIZE], ["?scan=slot", TVSIZE], ["?scan=delta", PHONE], ["?scan=slot", PHONE], ["?scan=delta&bloom=0", PHONE],
+    ["?scan=lines&bloom=2", PHONE], ["?2d&scan=slot", PHONE],
     ["?shadow=dither", TVSIZE], ["?shadow=smooth", TVSIZE], ["?shadow=blocky", TVSIZE], ["?shadow=off", TVSIZE], ["?2d&shadow=smooth", PHONE],
   ];
   for (const [search, view] of VARIANTS) {
@@ -95,14 +97,18 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
   });
 
   it("falls back to 2D when the WebGL context is lost, and keeps running", async () => {
-    const p = await open("", DESKTOP);
+    const p = await open("?scan=delta", DESKTOP);
     try {
       assert.equal(await p.ev("RENDERER"), "GL");
+      assert.equal(await p.ev("SCAN_STYLE"), "delta");
+      assert.equal(await p.ev("BLOOM"), 1);
       assert.equal(await p.ev(`(() => { const e = GLR.gl.getExtension("WEBGL_lose_context"); if (!e) return false; e.loseContext(); return true; })()`), true, "no WEBGL_lose_context");
       await p.sleep(1000);
       assert.equal(await p.ev("RENDERER"), "2D");
       assert.equal(await p.ev("GLR"), null);
       assert.equal(await p.ev("SHADOW_STYLE"), "classic", "the soft shadows need GL");
+      assert.equal(await p.ev("SCAN_STYLE"), "lines", "delta needs GL");
+      assert.equal(await p.ev("BLOOM"), 0, "the bloom needs GL");
       assert.ok((await p.ev(shown)).game, "#game is not shown after the fallback");
       await healthy(p, "after context loss");
     } finally { await p.close(); }
@@ -117,9 +123,56 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
   });
 
   it("takes the scanline style from ?scan=", async () => {
-    for (const [q, want] of [["", "lines"], ["?scan=soft", "soft"], ["?scan=grille", "grille"], ["?scan=off", "off"]]) {
+    for (const [q, want] of [["", "lines"], ["?scan=soft", "soft"], ["?scan=grille", "grille"], ["?scan=off", "off"],
+                             ["?scan=delta", "delta"], ["?scan=slot", "slot"], ["?2d&scan=delta", "lines"], ["?2d&scan=slot", "lines"], ["?2d&scan=soft", "soft"]]) {
       const p = await open(q, DESKTOP, 500);
       try { assert.equal(await p.ev("SCAN_STYLE"), want, q || "default"); } finally { await p.close(); }
+    }
+  });
+
+  it("takes the bloom strength from ?bloom= (1 for delta and slot, 0 elsewhere, none in 2D)", async () => {
+    for (const [q, want] of [["", 0], ["?scan=delta", 1], ["?scan=slot", 1], ["?scan=delta&bloom=0", 0], ["?scan=delta&bloom=2.5", 2.5],
+                             ["?scan=lines&bloom=1", 1], ["?scan=grille&bloom=0.5", 0.5], ["?bloom=2", 2], ["?scan=soft&bloom=", 0], ["?2d&scan=slot", 0], ["?2d&bloom=2", 0]]) {
+      const p = await open(q, DESKTOP, 500);
+      try { assert.equal(await p.ev("BLOOM"), want, q || "default"); } finally { await p.close(); }
+    }
+  });
+
+  it("draws delta and slot a whole number of device px per game px, on a whole device px, at a fractional DPR", async () => {
+    // the picture is W*k x H*k inside the canvas: one size up when that crops at most CRT_OVERSCAN (a TV's
+    // overscan), else one down with black bars. 390x844 @3 is the case that used to lose a quarter of the screen
+    for (const [q, view] of [["?scan=delta&crtfit=exact", { width: 390, height: 844, dpr: 2.75, mobile: true }], ["?scan=slot&tvs&crtfit=exact", { width: 1920, height: 1080, dpr: 1.25 }],
+                             ["?scan=delta&tvs&crtfit=exact", { width: 1280, height: 720, dpr: 1.5 }], ["?scan=slot&crtfit=exact", { width: 390, height: 844, dpr: 3, mobile: true }]]) {
+      const p = await open(q, view, 800);
+      try {
+        const r = await p.ev(`(() => { const c = GLR.cv, b = c.getBoundingClientRect(), d = devicePixelRatio;
+          return { k: DS, W, H, os: CRT_OVERSCAN, pic: GLR.pic(), cw: c.width, ch: c.height, x: b.left * d, y: b.top * d, w: b.width * d, h: b.height * d }; })()`);
+        const lab = `${q} at dpr ${view.dpr}`;
+        assert.ok(Number.isInteger(r.k) && r.k >= 2, `${lab}: ${r.k} device px per game px`);
+        assert.equal(r.pic.w, r.W * r.k, `${lab}: the picture is not W*k wide`);
+        assert.equal(r.pic.h, r.H * r.k, `${lab}: the picture is not H*k tall`);
+        assert.ok(Number.isInteger(r.pic.x) && Number.isInteger(r.pic.y), `${lab}: picture at ${r.pic.x},${r.pic.y} in the canvas`);
+        assert.ok(r.cw >= r.pic.w * (1 - r.os) - 1 && r.ch >= r.pic.h * (1 - r.os) - 1, `${lab}: more than ${r.os * 100}% cropped`);
+        if (view.dpr === 3) assert.ok(Math.min(r.cw / r.pic.w, r.ch / r.pic.h) > 0.9, `${lab}: the picture uses only ${(Math.min(r.cw / r.pic.w, r.ch / r.pic.h) * 100).toFixed(0)}% of the canvas`);
+        assert.ok(Math.abs(r.w - r.cw) < 0.1 && Math.abs(r.h - r.ch) < 0.1, `${lab}: shown at ${r.w}x${r.h}, not 1:1`);
+        assert.ok(Math.abs(r.x - Math.round(r.x)) < 0.01 && Math.abs(r.y - Math.round(r.y)) < 0.01, `${lab}: at ${r.x},${r.y}, not a whole device px`);
+        await healthy(p, lab);
+      } finally { await p.close(); }
+    }
+  });
+
+  it("fills the window with delta and slot by default (crtfit=fill): made at whole px offscreen, resized smoothly", async () => {
+    for (const [q, view] of [["?scan=delta", { width: 1280, height: 800, dpr: 2 }], ["?scan=slot&tvs", { width: 1440, height: 900, dpr: 1 }]]) {
+      const p = await open(q, view, 800);
+      try {
+        const r = await p.ev(`({ fit: CRT_FIT, k: DS, W, H, pic: GLR.pic(), cw: GLR.cv.width, ch: GLR.cv.height })`);
+        const lab = `${q} at ${view.width}x${view.height}@${view.dpr}`;
+        assert.equal(r.fit, "fill");
+        assert.ok(r.pic.fill, `${lab}: not drawn offscreen`);
+        assert.ok(Number.isInteger(r.k) && r.pic.w === r.W * r.k && r.pic.h === r.H * r.k, `${lab}: the offscreen picture is not whole px per game px`);
+        assert.ok(r.pic.w >= r.cw - 1 && r.pic.h >= r.ch - 1, `${lab}: made smaller than the screen (${r.pic.w}x${r.pic.h} for ${r.cw}x${r.ch})`);
+        await healthy(p, lab);
+      } finally { await p.close(); }
     }
   });
 

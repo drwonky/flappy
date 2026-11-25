@@ -415,4 +415,64 @@ describe("in the browser", { skip: chromeBin ? false : "no Chrome installed", co
       assert.ok(prof.length >= 3, "no profiler lines");
     } finally { await p.close(); }
   });
+
+  // BURNSAFE: the whole final picture (the beams and the mask too) orbits in whole device px
+  const still = `new Promise(res => { window.requestAnimationFrame = () => 0; setTimeout(res, 300); })`;   // (stop the loop: the test draws by hand)
+  it("shifts the whole picture, scan pattern and mask, by exactly the orbit in WebGL", async () => {
+    const p = await open("?tvs&scan=slot", TVSIZE, 800);
+    try {
+      if ((await p.ev("RENDERER")) !== "GL") return;
+      await p.ev(still);
+      assert.equal(await p.ev("BURNSAFE"), true);
+      const res = await p.ev(`(async () => {
+        const grab = async clock => {
+          orbitClock = clock; draw();
+          const w = GLR.cv.width, h = GLR.cv.height, im = new Image(); im.src = GLR.screenDataURL(0, 0, w, h); await im.decode();
+          const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d"); x.drawImage(im, 0, 0);
+          return { o: orbitXY(), w, h, d: x.getImageData(0, 0, w, h).data };
+        };
+        const a = await grab(0), b = await grab(81), [dx, dy] = b.o, { w, h } = a;
+        let bad = 0, lit = 0, edge = 0;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4, sx = x - dx, sy = y - dy;
+          if (sx < 0 || sy < 0 || sx >= w || sy >= h) { if (b.d[i] + b.d[i + 1] + b.d[i + 2] !== 0) edge++; continue; }
+          const j = (sy * w + sx) * 4;
+          if (b.d[i] !== a.d[j] || b.d[i + 1] !== a.d[j + 1] || b.d[i + 2] !== a.d[j + 2]) bad++;
+          if (a.d[j] + a.d[j + 1] + a.d[j + 2] > 60) lit++;
+        }
+        return { a: a.o, o: b.o, w, h, bad, lit, edge };
+      })()`);
+      assert.deepEqual(res.a, [0, 0]);
+      assert.ok(res.o[0] || res.o[1], "no orbit");
+      assert.ok(res.lit > res.w * res.h / 4, "the frame is dark");
+      assert.equal(res.bad, 0, `${res.bad} px differ from the 0,0 frame shifted by ${res.o}`);
+      assert.equal(res.edge, 0, "what moves in from outside is not black");
+      assert.deepEqual(p.errors, []);
+    } finally { await p.close(); }
+  });
+  it("shifts the 2D canvas and the scanline overlay by the orbit, in whole device px", async () => {
+    for (const dpr of [1, 1.5]) {
+      const p = await open("?tvs&2d", { width: 1920, height: 1080, dpr }, 800);
+      try {
+        await p.ev(still);
+        for (const clock of [0, 41, 40 * 30]) {
+          const r = await p.ev(`(() => { orbitClock = ${clock}; draw(); const g = s => { const m = /translate\\(([-\\d.e]+)px, ?([-\\d.e]+)px\\)/.exec(s); return m ? [+m[1] * DPR, +m[2] * DPR] : [0, 0]; };
+            return { o: orbitXY(), cvs: g(cvs.style.transform), scan: g(scan.style.transform) }; })()`);
+          for (const k of ["cvs", "scan"]) for (let i = 0; i < 2; i++) assert.ok(Math.abs(r[k][i] - r.o[i]) < 1e-3, `${k} at DPR ${dpr}, clock ${clock}: ${r[k]} for orbit ${r.o}`);
+          if (clock) assert.ok(r.o[0] || r.o[1]);
+        }
+        assert.deepEqual(p.errors, []);
+      } finally { await p.close(); }
+    }
+  });
+  it("leaves the picture and the overlay alone with ?burnsafe=0", async () => {
+    for (const q of ["?tvs&2d&burnsafe=0", "?2d&burnsafe=0&tvs&scan=lines"]) {
+      const p = await open(q, TVSIZE, 800);
+      try {
+        await p.ev(still);
+        const r = await p.ev(`(() => { orbitClock = 40 * 20 + 3; draw(); return [orbitXY(), cvs.style.transform, scan.style.transform, BURNSAFE]; })()`);
+        assert.deepEqual(r, [[0, 0], "", "", false]);
+      } finally { await p.close(); }
+    }
+  });
 });

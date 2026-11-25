@@ -73,7 +73,7 @@
 <div id="windctl"><label for="wind">env</label><input type="range" id="wind" min="0" max="1000" step="1" value="435"
   aria-valuetext="x1"><output id="windval" for="wind">x1</output><button id="disco" type="button"
   aria-pressed="false" title="60 seconds of every season, at x20">disco</button></div>
-<div id="hud">seasons r46</div>
+<div id="hud">seasons r47</div>
 
 <script>
 "use strict";
@@ -90,6 +90,7 @@
    the caption go away. */
 const TVS = /[?&]tvs(=|&|$)/.test(location.search);   // ?tvs: the same, scrolling as usual, the bird held in the middle
 const TV = TVS || /[?&]tv(=|&|$)/.test(location.search);
+const BURNSAFE = (m => m ? m[1] !== "0" : TV)(/[?&]burnsafe(?:=([^&]*))?(&|$)/.exec(location.search));   // OLED burn-in care: on in ?tv/?tvs (?burnsafe=0 off, ?burnsafe on anywhere): the whole picture orbits a device px at a time, the static HUD is dimmed and drifts
 const STAGE = TV && !TVS;                           // ?tv: still stages the bird flies across
 function tvHeight() {                               // the world's height: the screen's, divided by a whole number
   let sh = 0;
@@ -727,7 +728,7 @@ let falling = false, offT = 0, deathRot = 0;
 
 /* air state */
 let wind = { u: 0, target: 0, next: 0 }, gusts = [], currents = [], airParts = [];
-let airU = 0, gustE = 0, aBird = 0, aFelt = 0, airClock = 0;
+let airU = 0, gustE = 0, aBird = 0, aFelt = 0, airClock = 0, orbitClock = 0, hudClock = 0;
 let homeX = BIRD_X, flyT = 0, vrun = SPEED0, stageN = 1, stageT = 9, birdX = BIRD_X, gspd = SPEED0, dist = 0, cloudX = 0, curSince = 0, curNext = 300;
 const WA = { u: 0, a: 0 };                          // windAt() result, reused
 
@@ -827,7 +828,7 @@ function step(dt) {
   cosAcc += dt; cosDt = 0;
   if (lastSub) { cosDt = cosAcc; cosAcc = 0; }
   flash = Math.max(0, flash - dt * 3);
-  airClock += dt;
+  airClock += dt; orbitClock += dt; hudClock += dt;
   stepDisco(dt);
   stepSeason(dt);                  // the seasons turn through the crash too
   stepClock(dt); stepShooting(dt); // and the days
@@ -2000,7 +2001,7 @@ function makeGL(gl, cv) {
     vq: "attribute vec2 a_pos;void main(){gl_Position=vec4(a_pos,0.,1.);}",
     fq: "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n" +
         "uniform sampler2D u_scene;uniform sampler2D u_bloom;uniform vec2 u_out;uniform vec2 u_shake;uniform int u_mode;uniform float u_O;" +
-        "uniform vec2 u_bs,u_pic,u_off;uniform float u_ds,u_bk,u_pw,u_ph,u_sh,u_boost,u_dark;" +
+        "uniform vec2 u_bs,u_pic,u_off,u_orb;uniform float u_ds,u_bk,u_pw,u_ph,u_sh,u_boost,u_dark;" +
         "float luma(vec3 c){return dot(c,vec3(.299,.587,.114));}" +
         "float erfa(float x){float t=1.128379*x+.1008*x*x*x;return 1.-2./(exp(2.*t)+1.);}" +
         "vec3 shoulder(vec3 x){vec3 e=max(x-.7,0.);return min(x,vec3(.7))+.3*(1.-exp(-e/.3));}" +
@@ -2010,7 +2011,7 @@ function makeGL(gl, cv) {
         // how much of a beam (a gaussian, wider when bright) falls on [a,b] (in rows from its centre): 0..1
         "float beam(vec3 c,float a,float b){float sg=mix(.18,.42,clamp(luma(c),0.,1.))*1.4142136;return .5*(erfa(b/sg)-erfa(a/sg));}" +
         "void main(){" +
-        "vec2 f=gl_FragCoord.xy;float yt=u_out.y-f.y;float py=yt-u_off.y,px=f.x-u_off.x;vec2 s=vec2(px-u_shake.x,py-u_shake.y);vec3 c=vec3(0.);" +
+        "vec2 f=gl_FragCoord.xy-vec2(u_orb.x,-u_orb.y);float yt=u_out.y-f.y;float py=yt-u_off.y,px=f.x-u_off.x;vec2 s=vec2(px-u_shake.x,py-u_shake.y);vec3 c=vec3(0.);" +
         "bool crt=u_mode>=4;" +
         "vec2 uv=vec2(s.x/u_pic.x,1.-s.y/u_pic.y);" +
         "bool in_=s.x>=0.&&s.y>=0.&&s.x<u_pic.x&&s.y<u_pic.y;" +
@@ -2086,7 +2087,7 @@ function makeGL(gl, cv) {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     const u = {};
-    for (const n of ["u_inv", "u_atlas", "u_c", "u_r", "u_a", "u_ramp", "u_scene", "u_out", "u_pic", "u_off", "u_shake", "u_mode", "u_O",
+    for (const n of ["u_inv", "u_atlas", "u_c", "u_r", "u_a", "u_ramp", "u_scene", "u_out", "u_pic", "u_off", "u_orb", "u_shake", "u_mode", "u_O",
                      "u_bloom", "u_bs", "u_ds", "u_bk", "u_pw", "u_ph", "u_sh", "u_boost", "u_dark", "u_dir", "u_mask", "u_msz", "u_R", "u_style", "u_k", "u_tint", "u_sky", "u_skyH", "u_rmax", "u_con", "u_b0", "u_b1", "u_nb"]) u[n] = gl.getUniformLocation(p, n);
     return { p, u };
   };
@@ -2559,7 +2560,7 @@ function makeGL(gl, cv) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, blFb[0]); gl.bindTexture(gl.TEXTURE_2D, blTex[1]);
     gl.uniform2f(u.u_dir, 0, 1 / blH); gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  function present(shx, shy) {
+  function present(shx, shy, ox, oy) {
     flush();
     const bk = BLOOM;
     if (bk > 0) bloomPass();
@@ -2568,7 +2569,7 @@ function makeGL(gl, cv) {
     gl.disable(gl.BLEND); gl.disable(gl.STENCIL_TEST);
     gl.useProgram(PQ.p);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
-    gl.uniform1i(PQ.u.u_scene, 0); gl.uniform2f(PQ.u.u_out, tW, tH); gl.uniform2f(PQ.u.u_pic, picW_, picH_); gl.uniform2f(PQ.u.u_off, offX_, offY_);
+    gl.uniform1i(PQ.u.u_scene, 0); gl.uniform2f(PQ.u.u_out, tW, tH); gl.uniform2f(PQ.u.u_pic, picW_, picH_); gl.uniform2f(PQ.u.u_off, offX_, offY_); gl.uniform2f(PQ.u.u_orb, Math.round((ox || 0) * kpic), Math.round((oy || 0) * kpic));
     const crt = scanMode >= 4; gl.uniform2f(PQ.u.u_shake, crt ? Math.round(shx * kpic) : shx * kpic, crt ? Math.round(shy * kpic) : shy * kpic); gl.uniform1i(PQ.u.u_mode, scanMode); gl.uniform1f(PQ.u.u_O, scanO);
     gl.uniform1f(PQ.u.u_ds, scDS); gl.uniform1f(PQ.u.u_bk, bk); gl.uniform1f(PQ.u.u_pw, scPW); gl.uniform1f(PQ.u.u_ph, scPH);
     gl.uniform1f(PQ.u.u_sh, scSH); gl.uniform1f(PQ.u.u_boost, scBoost); gl.uniform1f(PQ.u.u_dark, scDark);
@@ -3512,9 +3513,9 @@ function drawSeasonHud() {                         // on the ground: SUMMER, or 
     ctx.font = F.hud;
     const x = 8 + Math.round(ctx.measureText(a + " ").width);
     put(">", x, "rgba(255,255,255,.8)");
-    ctx.globalAlpha = 0.35 + 0.65 * seasonF;
+    ctx.globalAlpha = HA * (0.35 + 0.65 * seasonF);
     put(SEASON_NAMES[seasonNext], x + Math.round(ctx.measureText("> ").width), SEASON_COLS[seasonNext]);
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = HA;
   }
   let y2 = y + 20;
   const hw = fireworks ? ["JULY 4TH", ["#ff6a5a", "#ffffff", "#7aa8ff"][(airClock * 3 | 0) % 3]] : hdWord();
@@ -5535,6 +5536,21 @@ function drawBoomFront() {                            // in front: the starburst
   }
 }
 
+/* BURNSAFE: nothing on screen stays put for hours. The whole final picture (the scanlines, beams and mask too) orbits by
+   whole device px, one every ORBIT.step s of game time, over a square of +-A (every row and subpixel takes its turn dark);
+   the static HUD is dimmed and drifts +-3 game px, slower. Both walk a boustrophedon there and back, never more than 1 px a step. */
+const ORBIT = { step: 40, hud: 90, hudA: 3 };
+let HA = 1;                                        // the HUD's alpha, for the bits that fade themselves
+function orbitAt(t, A, step) {                      // the offset at time t: a snake over the square, started at the middle, out to one end, back to the other
+  const n = 2 * A + 1, N = n * n, P = 2 * (N - 1), pos = (A * n + A + Math.floor(t / step)) % P, i = pos < N ? pos : P - pos;
+  const r = Math.floor(i / n), c = r & 1 ? n - 1 - i % n : i % n;
+  return [c - A, r - A];
+}
+const orbitA = () => Math.max(3, Math.round(DS));
+function orbitXY() { return BURNSAFE ? orbitAt(orbitClock, orbitA(), ORBIT.step) : [0, 0]; }   // device px
+function hudXY() { const [x, y] = BURNSAFE ? orbitAt(hudClock, ORBIT.hudA, ORBIT.hud) : [0, 0]; return [y, x]; }   // game px (turned, so it is not the picture's path)
+function hudBegin(a) { if (!BURNSAFE) return; const [x, y] = hudXY(); ctx.save(); ctx.translate(x, y); ctx.globalAlpha = a; HA = a; }
+function hudEnd() { if (!BURNSAFE) return; ctx.restore(); HA = 1; }
 function draw() {
   blendPalette();
   todSky();
@@ -5608,14 +5624,15 @@ function draw() {
 
   skyBehind();
 
-  outlineText(String(score), W / 2, 78, "#ffffff", F.big);
-  drawMorseHud();
+  hudBegin(0.8); outlineText(String(score), W / 2, 78, "#ffffff", F.big); hudEnd();
+  hudBegin(0.65); drawMorseHud(); hudEnd();
   if (STAGE && stageN > 1 && stageT < 1.6 && !dead) outlineText("STAGE " + stageN, W / 2, 112, "#ffe9a0", F.hud);
   if (quake && quake.t < QUAKE.rumble + 3.5 && (airClock * 4 | 0) % 2 === 0) outlineText("EARTHQUAKE!", W / 2, 150, "#ffcf6a", F.big);
   if (quake && quake.fell && quake.t > QUAKE.rumble + 1 && quake.t < QUAKE.rumble + 5) outlineText("FREE PASS", W / 2, 180, "#ffffff", F.hud);
   if (stLoopT > 0 && !dead) outlineText("LOOP-DE-LOOP!", W / 2, 204, "#ffe14a", F.hud);
   if (clearT > 0 && (airClock * 3 | 0) % 2 === 0)       // a gap sanded shut: the wind scours it all away
     outlineText(clearKind, W / 2, 120, clearKind === "THAW" ? "#9fe0ff" : "#ffe0a0", F.hud);
+  hudBegin(0.65);
   txt("BEST " + best, 8, 16, "rgba(255,255,255,.9)", F.hud, "left");
   ctx.save(); ctx.translate(0, -18);             // the right-hand column moves up into the first row
   drawWindHud();
@@ -5632,6 +5649,7 @@ function draw() {
     ctx.fillStyle = "rgba(255,255,255,.55)";
     ctx.fillRect(8, 30, 96 * (cooldown / COOLD), 2);
   }
+  hudEnd();
 
   if (dead) {
     ctx.fillStyle = "rgba(255,255,255," + (0.5 * flash) + ")";
@@ -5647,8 +5665,10 @@ function draw() {
     drawStats();
   }
 
+  hudBegin(0.65);
   if (PROF) profLines.forEach((l, i) => outlineText(l, W / 2, 150 + 18 * i, "#ffffff", F.hud));
   if (SHOWFPS) perfLine.forEach((l, i) => txt(l, W - 8, H - 26 + 18 * i, "#ffffff", F.hud, "right"));
+  hudEnd();
 
   /* a crash or a quake shakes the whole screen (a quake mostly side to side): the canvas
      itself is moved, in whole device px, over the black behind it; the scanlines stay put */
@@ -5660,10 +5680,14 @@ function draw() {
     const a = Math.max(m, ea) * DS, vy = mild ? 0.6 : ba >= qa ? 1 : 0.45;
     sx = Math.round((rnd() * 2 - 1) * a); sy = Math.round((rnd() * 2 - 1) * a * vy);
   }
-  if (GLR) { GLR.present(sx, sy); return; }       // (GL: the last pass shakes the picture, and the scanlines stay put)
-  const sh = shaking ? "translate(" + sx / DPR + "px," + sy / DPR + "px)" : "";
+  const [ox, oy] = orbitXY();
+  if (GLR) { GLR.present(sx, sy, ox, oy); return; }       // (GL: the last pass shakes the picture, and the scanlines stay put)
+  const sh = shaking || ox || oy ? "translate(" + (sx + ox) / DPR + "px," + (sy + oy) / DPR + "px)" : "";   // (whole device px: a pure translation)
   if (sh !== shakeCss) { cvs.style.transform = sh; shakeCss = sh; }
+  const oc = ox || oy ? "translate(" + ox / DPR + "px," + oy / DPR + "px)" : "";
+  if (oc !== orbitCss) { scan.style.transform = oc; orbitCss = oc; }
 }
+let orbitCss = "";
 let shakeCss = "";
 
 /* ---------- ENV slider: log scale OFF, x0.1 .. x20 (x20 = extreme) ----------

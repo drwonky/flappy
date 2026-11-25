@@ -826,3 +826,59 @@ describe("blimp disaster", () => {
     assert.equal(a.n, b.n);
   });
 });
+
+describe("BURNSAFE (OLED burn-in care)", () => {
+  const TVSCREEN = [1920, 1080];
+  it("is on with ?tv and ?tvs, off on the phone layout, and follows ?burnsafe", () => {
+    assert.equal(loadGame({ search: "?tvs", screen: TVSCREEN }).ev("BURNSAFE"), true);
+    assert.equal(loadGame({ search: "?tv", screen: TVSCREEN }).ev("BURNSAFE"), true);
+    assert.equal(loadGame({}).ev("BURNSAFE"), false);
+    assert.equal(loadGame({ search: "?tvs&burnsafe=0", screen: TVSCREEN }).ev("BURNSAFE"), false);
+    assert.equal(loadGame({ search: "?burnsafe" }).ev("BURNSAFE"), true);
+    assert.equal(loadGame({ search: "?burnsafe=1&noclock" }).ev("BURNSAFE"), true);
+    assert.equal(loadGame({ search: "?burnsafe=0" }).ev("BURNSAFE"), false);
+  });
+  it("orbits within +-A, 1 px at a time, from 0,0, and visits every offset in the square", () => {
+    const g = loadGame({ search: "?tvs", screen: TVSCREEN });
+    const A = g.ev("orbitA()"), step = g.ev("ORBIT.step"), n = 2 * A + 1, P = 2 * (n * n - 1);
+    assert.equal(A, 3);
+    assert.deepEqual(g.ev("orbitXY()"), [0, 0]);
+    const seen = new Set(); let prev = [0, 0];
+    for (let i = 0; i <= P; i++) {   // (a full there-and-back: the bound on the time to see them all is P steps, 3840 s)
+      g.ev(`orbitClock = ${i * step + step / 2}`);
+      const [x, y] = g.ev("orbitXY()");
+      assert.ok(Math.abs(x) <= A && Math.abs(y) <= A, `${x},${y} out of range`);
+      assert.ok(Math.abs(x - prev[0]) <= 1 && Math.abs(y - prev[1]) <= 1, `jumped from ${prev} to ${x},${y}`);
+      seen.add(x + "," + y); prev = [x, y];
+    }
+    assert.equal(seen.size, n * n);
+    assert.ok(P * step <= 4000);
+  });
+  it("moves one step every ORBIT.step s of game time", () => {
+    const g = loadGame({ search: "?tvs", screen: TVSCREEN });
+    g.run(39); assert.deepEqual(g.ev("orbitXY()"), [0, 0]);
+    g.run(2); assert.notDeepEqual(g.ev("orbitXY()"), [0, 0]);
+  });
+  it("keeps still with ?burnsafe=0", () => {
+    const g = loadGame({ search: "?tvs&burnsafe=0", screen: TVSCREEN });
+    for (const t of [0, 41, 500, 5000]) { g.ev(`orbitClock = hudClock = ${t}`); assert.deepEqual(g.ev("orbitXY()"), [0, 0]); assert.deepEqual(g.ev("hudXY()"), [0, 0]); }
+  });
+  it("drifts the HUD within +-3 game px, 1 px at a time", () => {
+    const g = loadGame({ search: "?tvs", screen: TVSCREEN });
+    let prev = [0, 0];
+    for (let t = 0; t < 90 * 120; t += 45) {
+      g.ev(`hudClock = ${t}`); const [x, y] = g.ev("hudXY()");
+      assert.ok(Math.abs(x) <= 3 && Math.abs(y) <= 3);
+      assert.ok(Math.abs(x - prev[0]) <= 1 && Math.abs(y - prev[1]) <= 1);
+      prev = [x, y];
+    }
+  });
+  it("never changes the game: the same seed plays the same with it on and off", () => {
+    const play = search => {
+      const g = loadGame({ search, seed: 21, screen: TVSCREEN }), s = [];
+      g.run(150, i => { if (i % 1200 === 0) s.push(g.ev("[score, bird.y, pipes.length, stats.runs]").join(",")); });
+      return s.join("|") + "#" + g.ev("[score, bird.y, stats.runs]").join(",");
+    };
+    assert.equal(play("?tvs&burnsafe=0"), play("?tvs&burnsafe=1"));
+  });
+});

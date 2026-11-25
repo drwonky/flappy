@@ -88,6 +88,16 @@ Values that do not parse are ignored, and the default is used. For example `?day
 - **Example:** `flappy-seasons.html?scan=slot&crtfit=exact`
 - **Interactions and caveats:** Only matters for `?scan=delta` and `?scan=slot` with WebGL. The other scanline styles always fill the window.
 
+### `burnsafe`
+
+- **Syntax:** `?burnsafe` or `?burnsafe=1` (on), `?burnsafe=0` (off)
+- **Default:** on with `?tv` and `?tvs`, off everywhere else.
+- **What it does:** Protects an OLED screen that runs the demo for hours. The HUD text is static and the scanline, beam and phosphor patterns (`scan`) sit on the same screen rows and subpixels forever, so they would wear unevenly. With it on:
+  - The whole final picture, scanlines, beams and mask included, orbits by whole screen pixels: one pixel every 40 s of game time, within +-3 px (`max(3, game px size)`, so about 2 game px on 1080p and 1 on 4K), along a path that visits every offset. Every row and subpixel takes turns being dark and lit. Pixels that move in from outside the picture are black. A single step is invisible, and it is a pure shift, so there is no blur or moire.
+  - The score is drawn at 80% brightness and all other HUD text (BEST and its bar, WIND, BIRD, ICE and status lines, the season and time words, the `?fps` and `?prof` readouts) at 65%, and the HUD layer drifts up to 3 game px, one px about every 90 s. The death banner and stats card are not dimmed: they are brief.
+- **Example:** `flappy-seasons.html?tvs&burnsafe=0` turns it off; `flappy-seasons.html?burnsafe` turns it on in the phone layout.
+- **Interactions and caveats:** It only moves and dims what is drawn, so the game plays the same with it on or off. In 2D the picture and the scanline overlay are moved with a CSS translate by the same whole screen pixels.
+
 ### `2d`
 
 - **Syntax:** `?2d` (flag)

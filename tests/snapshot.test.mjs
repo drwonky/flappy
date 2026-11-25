@@ -59,8 +59,8 @@ const OLD_SCENES = [
   ["abduction", "?season=2&hour=23", PH, "ufoNight = null; ufoNext = 0; UFO.abductP = 1; until(() => abducted, 40)", 0.9],
   ["dish-morse", "?season=0&hour=23", PH, "abducted = true; die(); reset()", 5],
   ["disco", "?season=0&hour=12", PH, "startDisco()", 3],
-  ["tv-night", "?tvs&season=3&hour=22", TV, "", 3],
-  ["tv-day-shadows", "?tvs&season=1&hour=12", TV, "", 3],
+  ["tv-night", "?tvs&season=3&hour=22&burnsafe=0", TV, "", 3],
+  ["tv-day-shadows", "?tvs&season=1&hour=12&burnsafe=0", TV, "", 3],
   ["fireworks-night", "?season=1&hour=22&fireworks", PH, "", 4.5],   // the show started at 1 s: about 4 s in
   ["blimp-fire-fall", "?season=1&hour=23&blimpfire", PH, "die = () => {}; seasonT = stormWindow()[0] + stormWindow()[1] * 0.35", 6.3],   // lightning hit it at 3 s: about 3 s into the fall
   ["blimp-wreck-blaze", "?season=0&hour=23&blimpfire", PH, "die = () => {}", 12],   // down at about 8.5 s: the wreck in full blaze
@@ -76,6 +76,7 @@ const SCENES = [
   ...OLD_SCENES.map(([n, q, ...r]) => [n, q + PIN, ...r]),
   ["christmas-santa", "?santa&hour=22&season=3" + PIN, PH, "die = () => {}; pipes = []; since = -1e9", 6.2],        // Santa half way across at about 5.7 s into it, the star at its brightest
   ["easter-blood-moon", "?easter&hour=22&season=0" + PIN, PH, "", 7.1],     // about 6.6 s into Easter: the shadow most of the way over the moon
+  ["tv-burnsafe-hud", "?tvs&season=1&hour=12" + PIN, TV, "hudClock = 200", 3],   // BURNSAFE on (the ?tvs default): the HUD dimmed (score 80%, the rest 65%) and drifted off its place by a px or two
   ["easter-sunrise", "?easter&hour=9&season=0" + PIN, PH, EGGS, 0.45],      // about 12.3 s in: gold, the bunny, lilies, eggs on the ground and two in the air
 ];
 
@@ -181,7 +182,7 @@ describe("GL matches 2D", { skip: chromeBin ? false : "no Chrome installed", con
 // is deterministic on one machine but not necessarily across versions
 const STYLE_SCENES = [
   ["summer-long", "?season=1&hour=8", PH, "", 3],
-  ["tv-afternoon", "?tvs&season=1&hour=16", TV, "", 3],
+  ["tv-afternoon", "?tvs&season=1&hour=16&burnsafe=0", TV, "", 3],
 ];
 const STYLES = ["dither", "smooth", "blocky", "off"];
 describe("GL shadow styles", { skip: chromeBin ? false : "no Chrome installed", concurrency: 4 }, () => {

@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rAF timing diagnostic</title>
+<style>
+:root{--bg:#0b0d10;--panel:rgba(18,22,28,.9);--fg:#f4f7fa;--dim:#b4bfcb;--ok:#3ddc84;--warn:#ffb300;--bad:#ff5252;--cy:#4dd0e1;--mg:#ea80fc;--line:#2c343e}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{font:20px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow-x:hidden}
+@media (min-width:1500px){body{font-size:26px}}
+#stage{position:fixed;left:0;top:0;width:100%;height:100%;z-index:0;pointer-events:none}
+#tiny{position:fixed;right:6px;bottom:6px;width:24px;height:24px;z-index:3}
+main{position:relative;z-index:1;max-width:1700px;margin:0 auto;padding:12px 16px 60px}
+h1{font-size:1.5rem;margin:.2em 0}
+h2{font-size:1.25rem;margin:1.2em 0 .4em}
+section,.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0}
+#status{font-size:1.5rem;font-weight:700;color:var(--cy);min-height:1.5em}
+#tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.tile{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.tile b{display:block;font-size:1.7rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tile span{color:var(--dim);font-size:.8rem}
+.tile.wide{grid-column:span 2}
+#graph{display:block;width:100%;height:32vh;min-height:220px;max-height:440px;background:#0e1217;border-radius:8px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:.85rem;color:var(--dim);margin-top:6px}
+.legend i{display:inline-block;width:.9em;height:.9em;border-radius:2px;vertical-align:-.1em;margin-right:.3em}
+button,.btn{font:inherit;background:#1f2833;color:var(--fg);border:2px solid #3a4655;border-radius:8px;padding:8px 14px;margin:4px 6px 4px 0;cursor:pointer;text-decoration:none;display:inline-block}
+button:hover,button:focus,.btn:hover{border-color:var(--cy);outline:none}
+button.sel{border-color:var(--ok);background:#173325}
+.tbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:.85rem}
+.tbl th,.tbl td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
+.tbl th{color:var(--dim);font-weight:600}
+.bad{color:var(--bad)}.warn{color:var(--warn)}.ok{color:var(--ok)}.info{color:var(--cy)}
+.v{border-left:8px solid var(--line);padding:6px 12px;margin:8px 0;background:#10141a;border-radius:6px}
+.v.bad{border-color:var(--bad)}.v.warn{border-color:var(--warn)}.v.ok{border-color:var(--ok)}.v.info{border-color:var(--cy)}
+.v h3{margin:0 0 .2em;font-size:1.1rem;color:var(--fg)}
+.v p{margin:.2em 0;color:var(--fg);font-size:.95rem}
+.v ul{margin:.3em 0 0;padding-left:1.2em;color:var(--dim);font-size:.85rem;font-family:ui-monospace,Menlo,Consolas,monospace}
+#headline{font-size:1.35rem;font-weight:700}
+.tl{display:block;width:100%;height:220px;background:#0e1217;border-radius:6px;margin:4px 0 10px}
+pre#rep,textarea#fb{width:100%;background:#06080a;color:#e6edf3;border:1px solid var(--line);border-radius:6px;padding:10px;font:14px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;margin:6px 0}
+textarea#fb{height:200px;display:none}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:2px 16px;margin:0;font-size:.85rem}
+dt{color:var(--dim)}dd{margin:0;word-break:break-word}
+.how li{margin:.3em 0}.how{font-size:.9rem;color:var(--fg)}
+.small{font-size:.8rem;color:var(--dim)}
+#tmsg{color:var(--warn)}
+@media (max-width:760px){
+ body{font-size:18px}
+ .tile b{font-size:1.4rem}
+ .tbl,.tbl tbody,.tbl tr,.tbl td{display:block;width:100%}
+ .tbl thead{display:none}
+ .tbl tr{border:1px solid var(--line);border-radius:8px;margin:8px 0;padding:4px 8px}
+ .tbl td{display:flex;justify-content:space-between;border:0;padding:3px 0;white-space:normal}
+ .tbl td::before{content:attr(data-l);color:var(--dim);margin-right:12px}
+ .tbl td:first-child{font-weight:700;font-size:1.05rem;justify-content:flex-start}
+ .tbl td:first-child::before{content:""}
+}
+</style>
+</head>
+<body>
+<canvas id="tiny" width="24" height="24"></canvas>
+<div id="stage"></div>
+<main>
+<h1>rAF timing diagnostic</h1>
+<div id="status">Loading...</div>
+
+<section id="live">
+ <div id="tiles"></div>
+ <canvas id="graph"></canvas>
+ <div class="legend">
+  <span><i style="background:#3ddc84"></i>interval k=1</span><span><i style="background:#ffb300"></i>k=2</span><span><i style="background:#ff5252"></i>k&ge;3</span>
+  <span><i style="background:#4dd0e1"></i>dispatch latency (line)</span>
+  <span><i style="background:#ea80fc"></i>heartbeat stall</span><span><i style="background:#26c6da"></i>long task</span><span><i style="background:#ff9800"></i>long animation frame</span><span><i style="background:#fff"></i>page event</span>
+  <span>dashed guides: 1&times; and 2&times; vsync</span>
+ </div>
+ <div id="tmsg" class="small"></div>
+</section>
+
+<section id="ctl">
+ <div id="chips"></div>
+ <button id="bRestart">Restart all (Enter / OK)</button>
+ <span class="small">Left / Right on the remote: run one mode alone.</span>
+</section>
+
+<section id="result" style="display:none">
+ <h2 style="margin-top:0">Verdict</h2>
+ <div id="headline"></div>
+ <div id="verdicts"></div>
+ <h2>Summary</h2>
+ <table class="tbl" id="sum"></table>
+ <div class="small" id="sumnote"></div>
+ <h2>Timelines (whole measured run of each mode)</h2>
+ <div id="tls"></div>
+ <h2>Report</h2>
+ <button id="bCopy">Copy report</button><a class="btn" id="bJson" download="raf-diag.json">Download JSON</a>
+ <span id="copied" class="ok"></span>
+ <textarea id="fb" readonly></textarea>
+ <pre id="rep"></pre>
+</section>
+
+<section class="how">
+ <h2 style="margin-top:0">How to read this</h2>
+ <ul>
+  <li><b>vsync Hz</b>: the display refresh as the page sees it, the median of the last 15 rAF timestamp intervals (the same idea the game's pacer uses). Later modes reuse the Idle figure (or <code>?hz=</code> if given) so a mode that is itself slow cannot hide its own misses.</li>
+  <li><b>interval</b>: gap between consecutive rAF timestamps (<code>ts</code>, the frame's vsync time in Chromium). <b>k</b> = interval / vsync, rounded: 1 is on time, 2 or more means whole refreshes were skipped. Skipped <code>ts</code> = frames dropped (or rAF paced slower) upstream of your code.</li>
+  <li><b>latency</b>: <code>performance.now()</code> at callback start minus <code>ts</code>. Regular <code>ts</code> with big or irregular latency = the main thread (OS or browser) ran the callback late.</li>
+  <li><b>heartbeat</b>: a MessageChannel loop independent of rendering. A "stall" is a gap over 16 ms between its own callbacks: the event loop was not running. Stalls that coincide with skipped frames (same time axis in the graph) mean the main thread itself was starved.</li>
+  <li><b>long tasks</b>: tasks over 50 ms reported by the browser (if supported).</li>
+  <li><b>work</b>: how long the page's own callback took. If work is short but frames are skipped, the loss is after JavaScript: compositor, raster, GPU or OS.</li>
+  <li>Modes: Idle is the baseline. CPU 4 / 10 ms add main-thread load (10 ms must miss at 120 Hz, not at 60). Canvas 2D and WebGL load raster and GPU fill at full device resolution. Timer-driven uses <code>setTimeout(16)</code> for comparison.</li>
+  <li>Remote: Enter/OK restarts everything; Left/Right runs one mode. Options in the URL: <code>?secs=20</code> seconds per mode, <code>?hz=120</code> the display's real rate, <code>?graph=0</code> no graph during Idle, <code>?graph=none</code> never draw it while running, <code>?hb=spin</code> heartbeat by message hops only.</li>
+ </ul>
+</section>
+
+<section>
+ <h2 style="margin-top:0">Environment</h2>
+ <dl id="env"></dl>
+</section>
+</main>
+
+<script>
+/* ============================================================================
+ rAF timing diagnostic.  One file, no network.  Written to run on old Chromium-based
+ TV browsers: no optional chaining, no class fields.
+
+ OVERHEAD.  Everything per frame is preallocated typed-array writes.  The rAF callback
+ allocates nothing (no closures, arrays or strings).  The only per-frame work besides
+ the mode's own load is: performance.now() x2, a 15-element insertion-sort median, and
+ ~8 typed-array stores.  The UI (tiles + graph) is NOT drawn inside rAF: a setInterval
+ every 250 ms does it, so it costs one short task a few times a second (typically
+ 1 to 3 ms with the graph, less without).  Its worst cost per mode is measured and
+ shown ("UI cost"), so you can see whether the page itself could be the jitter.  For a
+ purist baseline use ?graph=0 (no graph while Idle, text only once a second).
+============================================================================ */
+(function () {
+'use strict';
+var Q = new URLSearchParams(location.search);
+var SECS = Math.max(1, Math.min(300, +Q.get('secs') || 20));
+var WARM = 1000;                         /* warm-up per mode, ms, not counted */
+var COUNTDOWN = 3;
+var DECL_HZ = +Q.get('hz') || 0;         /* the display's real rate, if the user knows it */
+var GRAPH_IDLE = Q.get('graph') !== '0', GRAPH_NONE = Q.get('graph') === 'none';
+var HB_SPIN = Q.get('hb') === 'spin';
+var SPAN = 10000;                        /* live graph window, ms */
+var STALL_MS = 16;                       /* heartbeat gap that counts as a stall */
+
+/* Verdict thresholds (explicit and conservative; see computeVerdict) */
+var T_SKIP = 3;      /* % of frames with k>=2 above which a mode "skips frames" */
+var T_CLEAN = 1;     /* % below which it is "clean" */
+var T_LATE = 0.5;    /* latency p95 above this fraction of a vsync = callbacks start late */
+var T_STALLN = 2, T_STALLMS = 32;   /* heartbeat: this many stalls, or one this long, = main thread starved */
+var T_ALIGN = 0.6;   /* share of skipped frames overlapping a stall needed to call them aligned */
+
+var $ = function (id) { return document.getElementById(id); };
+var MODES = [
+  { id: 'idle',   name: 'Idle' },
+  { id: 'cpu4',   name: 'CPU 4 ms' },
+  { id: 'cpu10',  name: 'CPU 10 ms' },
+  { id: 'canvas', name: 'Canvas 2D' },
+  { id: 'webgl',  name: 'WebGL fill' },
+  { id: 'timer',  name: 'Timer (setTimeout 16)' }
+];
+
+/* ---------------- event logs (preallocated) ---------------- */
+var ST_CAP = 4096, stT = new Float64Array(ST_CAP), stD = new Float32Array(ST_CAP), stN = 0;      /* heartbeat stalls: end time, length */
+var LT_CAP = 2048, ltT = new Float64Array(LT_CAP), ltD = new Float32Array(LT_CAP), ltK = new Uint8Array(LT_CAP), ltN = 0;   /* kind 0 longtask, 1 LoAF */
+var LC_CAP = 512, lcT = new Float64Array(LC_CAP), lcName = new Array(LC_CAP), lcN = 0;           /* lifecycle */
+function lifecycle(name) {
+  var t = performance.now();
+  if (lcN < LC_CAP) { lcT[lcN] = t; lcName[lcN] = name; lcN++; }
+  if (cur && cur.tStart <= t && t < cur.tEnd && (name === 'hidden' || name === 'freeze' || name === 'pagehide')) cur.hidden++;
+}
+document.addEventListener('visibilitychange', function () { lifecycle(document.visibilityState === 'hidden' ? 'hidden' : 'visible'); });
+window.addEventListener('focus', function () { lifecycle('focus'); });
+window.addEventListener('blur', function () { lifecycle('blur'); });
+document.addEventListener('freeze', function () { lifecycle('freeze'); });
+document.addEventListener('resume', function () { lifecycle('resume'); });
+window.addEventListener('pagehide', function () { lifecycle('pagehide'); });
+window.addEventListener('pageshow', function () { lifecycle('pageshow'); });
+
+/* ---------------- long tasks / long animation frames ---------------- */
+var supp = (window.PerformanceObserver && PerformanceObserver.supportedEntryTypes) ? PerformanceObserver.supportedEntryTypes : [];
+var LT_OK = false, LOAF_OK = false, observers = [];
+function ltHandle(list) {
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (ltN < LT_CAP) { ltT[ltN] = e.startTime; ltD[ltN] = e.duration; ltK[ltN] = e.entryType === 'long-animation-frame' ? 1 : 0; ltN++; }
+  }
+}
+function observe(type) {
+  try {
+    var po = new PerformanceObserver(function (l) { ltHandle(l.getEntries()); });
+    po.observe({ type: type });
+    observers.push(po);
+    return true;
+  } catch (e) {
+    try { var p2 = new PerformanceObserver(function (l) { ltHandle(l.getEntries()); }); p2.observe({ entryTypes: [type] }); observers.push(p2); return true; } catch (e2) { return false; }
+  }
+}
+if (supp.indexOf('longtask') >= 0 || !supp.length) LT_OK = observe('longtask');
+if (supp.indexOf('long-animation-frame') >= 0) LOAF_OK = observe('long-animation-frame');
+function flushObservers() { for (var i = 0; i < observers.length; i++) { try { ltHandle(observers[i].takeRecords()); } catch (e) {} } }
+
+/* ---------------- heartbeat ----------------
+ A loop that does not depend on rendering.  Each beat is a MessageChannel message
+ (port2.postMessage -> port1.onmessage), so every beat is its own task and the browser can
+ run rAF, input and rendering tasks between beats (a plain while-loop would starve them).
+ On every beat we read performance.now() and record the gap since the previous beat.
+ Throttle: if less than 1 ms has passed we do not record; the next hop is posted via a
+ zero-delay timer so the thread idles between beats (about 250 to 1000 beats a second,
+ depending on the browser's timer clamp).  ?hb=spin hops via messages only: a true ~1 kHz
+ but it keeps one core busy, so it is off by default on weak TV SoCs.  Without
+ MessageChannel it falls back to setTimeout(..., 4).  A gap over 16 ms is a stall: the
+ event loop was not turning (busy main thread, OS descheduling, throttled timers). */
+var hbLast = 0, hbPort = null;
+function hbBeat() {
+  var t = performance.now(), g = t - hbLast;
+  if (g >= 1) {
+    var R = cur;
+    if (R && R.tStart <= hbLast && t < R.tEnd) {
+      R.hbN++; R.hbSum += g; if (g > R.hbMax) R.hbMax = g;
+      if (g > STALL_MS) { R.stN++; if (g > R.stWorst) R.stWorst = g; }
+    }
+    if (g > STALL_MS && stN < ST_CAP) { stT[stN] = t; stD[stN] = g; stN++; }
+    hbLast = t;
+  }
+  hbHop(g >= 1);
+}
+function hbHop(recorded) {
+  if (hbPort) {
+    if (HB_SPIN || !recorded) hbPort.postMessage(0);
+    else setTimeout(hbPostMsg, 0);
+  } else setTimeout(hbBeat, 4);
+}
+function hbPostMsg() { hbPort.postMessage(0); }
+(function () {
+  hbLast = performance.now();
+  try { var ch = new MessageChannel(); ch.port1.onmessage = hbBeat; hbPort = ch.port2; } catch (e) { hbPort = null; }
+  hbHop(true);
+})();
+
+/* ---------------- per-run recorder ---------------- */
+var cur = null;          /* the run being measured */
+var scratch15 = new Float32Array(15);
+var tinyCv = $('tiny'), tinyCtx = tinyCv.getContext('2d');
+var PAL = ['#f44336', '#e91e63', '#9c27b0', '#3f51b5', '#03a9f4', '#009688', '#8bc34a', '#ffc107'];
+
+function newRun(m) {
+  var cap = Math.ceil(SECS * 300) + 600;     /* up to 300 Hz */
+  return {
+    id: m.id, name: m.name, cap: cap, n: 0,
+    ts: new Float64Array(cap), now: new Float64Array(cap), end: new Float64Array(cap),
+    work: new Float32Array(cap), lat: new Float32Array(cap), intv: new Float32Array(cap), k: new Uint8Array(cap),
+    win: new Float32Array(15), wi: 0, wn: 0, med: 0, prevTs: 0, ref: refFor(m.id), early: 0,
+    tStart: Infinity, tEnd: Infinity, planEnd: 0, phase: 'warm', dead: false, skip: '', hidden: 0,
+    hbN: 0, hbSum: 0, hbMax: 0, stN: 0, stWorst: 0, uiMax: 0, f: 0,
+    raf: 0, tm: 0, sched: 0, cb: null, load: null, canvas: null, ctx: null, gl: null, lost: false, info: ''
+  };
+}
+function refFor(id) {
+  if (DECL_HZ > 0) return 1000 / DECL_HZ;
+  var i = results.idle;
+  if (id !== 'idle' && i && i.status === 'ok' && i.p50 > 3 && i.p50 < 60) return i.p50;
+  return 0;
+}
+function median15(R) {
+  var n = R.wn, i, j, v;
+  for (i = 0; i < n; i++) scratch15[i] = R.win[i];
+  for (i = 1; i < n; i++) { v = scratch15[i]; j = i - 1; while (j >= 0 && scratch15[j] > v) { scratch15[j + 1] = scratch15[j]; j--; } scratch15[j + 1] = v; }
+  return scratch15[n >> 1];
+}
+/* the shared per-frame core (rAF and timer modes both land here) */
+function core(R, ts, now, lat) {
+  var intv = R.prevTs > 0 ? ts - R.prevTs : 0;
+  R.prevTs = ts;
+  if (intv > 0) { R.win[R.wi] = intv; R.wi = R.wi === 14 ? 0 : R.wi + 1; if (R.wn < 15) R.wn++; R.med = median15(R); }
+  R.load(R, now);
+  var end = performance.now();
+  if (intv > 0 && now >= R.tStart && now < R.tEnd && R.n < R.cap) {
+    var vs = R.ref > 0 ? R.ref : (R.med > 0 ? R.med : 16.667);
+    var kk = Math.round(intv / vs);
+    if (kk < 1) { kk = 1; R.early++; } else if (kk > 255) kk = 255;
+    var i = R.n++;
+    R.ts[i] = ts; R.now[i] = now; R.end[i] = end; R.work[i] = end - now; R.lat[i] = lat; R.intv[i] = intv; R.k[i] = kk;
+  }
+}
+function rafCb(R) { return function (ts) { if (R.dead) return; var now = performance.now(); R.raf = requestAnimationFrame(R.cb); core(R, ts, now, now - ts); }; }
+function timerCb(R) { return function () { if (R.dead) return; var now = performance.now(); var lat = R.sched ? now - R.sched : 0; R.sched = now + 16; R.tm = setTimeout(R.cb, 16); core(R, now, now, lat); }; }
+
+/* ---------------- the loads ---------------- */
+function tiny(R) { R.f++; tinyCtx.fillStyle = PAL[R.f & 7]; tinyCtx.fillRect(0, 0, 24, 24); }   /* the only drawing in Idle */
+function busy(ms) { return function (R, now) { tiny(R); var e = now + ms; while (performance.now() < e) { /* spin */ } }; }
+function mkStageCanvas(R) {
+  var dpr = window.devicePixelRatio || 1;
+  var cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(innerWidth * dpr)); cv.height = Math.max(1, Math.round(innerHeight * dpr));
+  cv.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:0';
+  $('stage').appendChild(cv); R.canvas = cv;
+  R.info = cv.width + 'x' + cv.height;
+  return cv;
+}
+function setupCanvas2d(R) {
+  var cv = mkStageCanvas(R), ctx = cv.getContext('2d', { alpha: false });
+  if (!ctx) { R.skip = 'no 2D context'; return; }
+  var N = 3000, W = cv.width, H = cv.height, d = window.devicePixelRatio || 1;
+  var rx = new Float32Array(N), ry = new Float32Array(N), rw = new Float32Array(N), rh = new Float32Array(N), rs = new Float32Array(N);
+  var seed = 12345;
+  function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+  for (var i = 0; i < N; i++) { rx[i] = rnd() * W; ry[i] = rnd() * H; rw[i] = (6 + rnd() * 40) * d; rh[i] = (6 + rnd() * 40) * d; rs[i] = (0.5 + rnd() * 3) * d; }
+  var cols = []; for (i = 0; i < 16; i++) cols.push('hsl(' + (i * 22) + ',70%,' + (30 + (i % 4) * 8) + '%)');
+  R.load = function (R, now) {
+    tiny(R);
+    ctx.fillStyle = '#101820'; ctx.fillRect(0, 0, W, H);
+    var per = N >> 4, c = 0, f = R.f * 1.0;
+    for (var j = 0; j < N; j++) {
+      if ((j % per) === 0) { ctx.fillStyle = cols[c < 15 ? c++ : 15]; }
+      var x = rx[j] + f * rs[j]; x = x - Math.floor(x / W) * W;
+      ctx.fillRect(x, ry[j], rw[j], rh[j]);
+    }
+  };
+}
+function setupWebgl(R) {
+  var cv = mkStageCanvas(R);
+  var gl = null;
+  try { gl = cv.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' }) || cv.getContext('experimental-webgl'); } catch (e) {}
+  if (!gl) { R.skip = 'WebGL not available'; return; }
+  function sh(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'shader'); return s; }
+  try {
+    var p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, 'attribute vec2 p;varying vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0.,1.);}'));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, 'precision mediump float;varying vec2 uv;uniform float t;uniform float pass;void main(){vec2 q=uv*8.+pass;float a=0.;for(int i=0;i<6;i++){q=vec2(sin(q.y*1.7+t)+q.x*.31,cos(q.x*1.3-t)+q.y*.29);a+=sin(q.x*q.y+float(i));}gl_FragColor=vec4(.5+.5*sin(a+vec3(0.,2.,4.)),.35);}'));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('link failed');
+    gl.useProgram(p);
+    var b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    var loc = gl.getAttribLocation(p, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    var uT = gl.getUniformLocation(p, 't'), uP = gl.getUniformLocation(p, 'pass');
+    gl.viewport(0, 0, cv.width, cv.height);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  } catch (e) { R.skip = 'WebGL setup failed: ' + e.message; return; }
+  R.gl = gl;
+  cv.addEventListener('webglcontextlost', function (ev) { ev.preventDefault(); R.lost = true; });
+  R.load = function (R, now) {
+    tiny(R);
+    if (R.lost) return;
+    gl.uniform1f(uT, R.f * 0.02);
+    for (var i = 0; i < 8; i++) { gl.uniform1f(uP, i); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); }
+  };
+}
+function setupMode(R) {
+  switch (R.id) {
+    case 'idle': R.load = tiny; break;
+    case 'cpu4': R.load = busy(4); break;
+    case 'cpu10': R.load = busy(10); break;
+    case 'canvas': setupCanvas2d(R); break;
+    case 'webgl': setupWebgl(R); break;
+    case 'timer': R.load = tiny; break;
+  }
+}
+function teardown(R) {
+  R.dead = true;
+  try { cancelAnimationFrame(R.raf); clearTimeout(R.tm); } catch (e) {}
+  if (R.gl) { try { var x = R.gl.getExtension('WEBGL_lose_context'); if (x) x.loseContext(); } catch (e) {} R.gl = null; }
+  if (R.canvas) { R.canvas.width = 1; R.canvas.height = 1; if (R.canvas.parentNode) R.canvas.parentNode.removeChild(R.canvas); R.canvas = null; }
+  R.load = tiny;
+  if (cur === R) cur = null;
+}
+
+/* ---------------- statistics ---------------- */
+function pctl(a, n, p) { if (!n) return 0; var i = Math.ceil(p * n) - 1; return a[i < 0 ? 0 : i]; }
+function sortedCopy(src, n) { var a = new Float32Array(n); a.set(src.subarray(0, n)); a.sort(); return a; }
+function finalize(R) {
+  var n = R.n, S = { id: R.id, name: R.name, status: 'ok', frames: n, run: R, hidden: R.hidden, size: R.info };
+  S.t0 = R.tStart; S.t1 = R.tEnd; S.secs = (R.tEnd - R.tStart) / 1000;
+  if (n < 10) { S.status = 'nodata'; S.reason = 'only ' + n + ' frames recorded'; return S; }
+  var a = sortedCopy(R.intv, n), sum = 0, i;
+  for (i = 0; i < n; i++) sum += R.intv[i];
+  S.p50 = pctl(a, n, .5); S.p95 = pctl(a, n, .95); S.p99 = pctl(a, n, .99); S.max = a[n - 1];
+  S.hzOwn = 1000 / S.p50; S.fps = n / (sum / 1000);
+  S.vsMs = R.ref > 0 ? R.ref : S.p50; S.hz = 1000 / S.vsMs; S.refBorrowed = R.ref > 0;
+  var k2 = 0, k3 = 0, missed = 0, fast = 0;
+  for (i = 0; i < n; i++) { var k = R.k[i]; if (k >= 2) { k2++; missed += k - 1; } if (k >= 3) k3++; if (R.intv[i] < 0.65 * S.p50) fast++; }
+  S.kPct = 100 * k2 / n; S.k3Pct = 100 * k3 / n; S.missed = missed; S.early = R.early; S.fastShare = fast / n;
+  var l = sortedCopy(R.lat, n);
+  S.latMin = l[0]; S.latP50 = pctl(l, n, .5); S.latP95 = pctl(l, n, .95); S.latMax = l[n - 1];
+  S.latValid = R.id === 'timer' || (S.latP50 > -2 && S.latP50 < 500);
+  var w = sortedCopy(R.work, n);
+  S.workP50 = pctl(w, n, .5); S.workP95 = pctl(w, n, .95); S.workMax = w[n - 1];
+  S.hbRate = R.hbN / Math.max(0.001, S.secs); S.hbMax = R.hbMax; S.stN = R.stN; S.stWorst = R.stWorst;
+  S.uiMax = R.uiMax;
+  var ltn = 0, ltms = 0, lfn = 0, lfms = 0;
+  for (i = 0; i < ltN; i++) if (ltT[i] >= R.tStart && ltT[i] <= R.tEnd) { if (ltK[i] === 0) { ltn++; ltms += ltD[i]; } else { lfn++; lfms += ltD[i]; } }
+  S.ltN = ltn; S.ltMs = ltms; S.loafN = lfn; S.loafMs = lfms;
+  /* does a skipped frame overlap a heartbeat stall? (both lists are time-sorted: two pointers) */
+  var s0 = []; for (i = 0; i < stN; i++) if (stT[i] >= R.tStart && stT[i] - stD[i] <= R.tEnd) s0.push(i);
+  var j = 0, sm = 0, st = 0, om = 0, ot = 0;
+  for (i = 0; i < n; i++) {
+    var wend = R.ts[i] + 2, wst = R.ts[i] - R.intv[i] - 2;
+    while (j < s0.length && stT[s0[j]] < wst) j++;
+    var hit = j < s0.length && stT[s0[j]] - stD[s0[j]] < wend;
+    if (R.k[i] >= 2) { st++; if (hit) sm++; } else { ot++; if (hit) om++; }
+  }
+  S.skipTot = st; S.skipMatch = sm; S.align = st ? sm / st : 0; S.base = ot ? om / ot : 0;
+  return S;
+}
+
+/* ---------------- live stats + UI ---------------- */
+var liveScratch = new Float32Array(SECS * 300 + 600);
+function liveStats(R) {
+  var n = R.n, o = { n: n, p50: 0, p95: 0, p99: 0, max: 0, kPct: 0, latP95: 0, latMax: 0 };
+  if (n < 2) return o;
+  var a = liveScratch.subarray(0, n); a.set(R.intv.subarray(0, n)); a.sort();
+  o.p50 = pctl(a, n, .5); o.p95 = pctl(a, n, .95); o.p99 = pctl(a, n, .99); o.max = a[n - 1];
+  var k2 = 0, i; for (i = 0; i < n; i++) if (R.k[i] >= 2) k2++;
+  o.kPct = 100 * k2 / n;
+  a.set(R.lat.subarray(0, n)); a.sort(); o.latP95 = pctl(a, n, .95); o.latMax = a[n - 1];
+  var sum = 0; for (i = 0; i < n; i++) sum += R.intv[i];
+  o.fps = n / (sum / 1000);
+  return o;
+}
+var TILES = [['mode', 'mode', 'wide'], ['left', 'time left'], ['hz', 'vsync est. (Hz)'], ['fps', 'FPS'], ['p50', 'interval p50 ms'], ['p95', 'p95 ms'], ['p99', 'p99 ms'], ['max', 'max ms'],
+  ['k2', 'frames k>=2'], ['l95', 'latency p95 ms'], ['lmax', 'latency max ms'], ['stall', 'stalls / worst ms'], ['lt', 'long tasks'], ['ui', 'UI cost ms']];
+var tileEls = {}, tileLast = {};
+(function () {
+  var h = '';
+  TILES.forEach(function (t) { h += '<div class="tile ' + (t[2] || '') + '"><b id="t_' + t[0] + '">-</b><span>' + t[1] + '</span></div>'; });
+  $('tiles').innerHTML = h;
+  TILES.forEach(function (t) { tileEls[t[0]] = $('t_' + t[0]); });
+})();
+function setTile(k, v) { if (tileLast[k] !== v) { tileLast[k] = v; tileEls[k].textContent = v; } }
+var f1 = function (x) { return (+x).toFixed(1); };
+var lastUI = 0;
+function uiTick() {
+  var R = cur, t0 = performance.now();
+  if (!R) return;
+  if (R.id === 'idle' && !GRAPH_IDLE && t0 - lastUI < 990) return;
+  lastUI = t0;
+  var L = liveStats(R);
+  var left = R.phase === 'warm' ? 'warm-up' : Math.max(0, (R.planEnd - t0) / 1000).toFixed(0) + ' s';
+  setTile('mode', R.name + (R.phase === 'warm' ? ' (warm-up)' : ''));
+  setTile('left', left);
+  setTile('hz', R.med > 0 ? f1(1000 / R.med) : '-');
+  setTile('fps', L.n > 1 ? f1(L.fps) : '-');
+  setTile('p50', f1(L.p50)); setTile('p95', f1(L.p95)); setTile('p99', f1(L.p99)); setTile('max', f1(L.max));
+  setTile('k2', L.kPct.toFixed(1) + ' %');
+  setTile('l95', f1(L.latP95)); setTile('lmax', f1(L.latMax));
+  setTile('stall', R.stN + ' / ' + f1(R.stWorst));
+  var ln = 0; for (var i = 0; i < ltN; i++) if (ltK[i] === 0 && ltT[i] >= R.tStart) ln++;
+  setTile('lt', LT_OK ? String(ln) : 'n/a');
+  setTile('ui', f1(R.uiMax));
+  var g = $('graph');
+  if (!GRAPH_NONE && !(R.id === 'idle' && !GRAPH_IDLE)) drawGraph(g, R, t0, SPAN, true);
+  else if (!g._off) { g._off = 1; clearGraph(g, 'graph hidden for this mode (?graph=0 / none)'); }
+  if (!(R.id === 'idle' && !GRAPH_IDLE) && !GRAPH_NONE) g._off = 0;
+  var c = performance.now() - t0;
+  if (R.phase === 'run' && c > R.uiMax) R.uiMax = c;
+}
+setInterval(uiTick, 250);
+
+/* ---------------- graph ----------------
+ x = time (performance.now clock, same for every marker), newest on the right.
+ Bars: one per rAF frame, spanning its interval, height = interval in ms, colour by k.
+ Line: dispatch latency (ms, same scale).  Dashed: 1x and 2x vsync.
+ Top lanes: heartbeat stalls (magenta, also a faint column through the plot),
+ long tasks / long animation frames, and page lifecycle events (white lines).
+ Cost: about one fillRect per frame in the window (600 at 60 Hz), drawn at 4 Hz. */
+function sizeCanvas(cv) {
+  var s = Math.min(window.devicePixelRatio || 1, 2), w = Math.max(50, Math.round(cv.clientWidth * s)), h = Math.max(50, Math.round(cv.clientHeight * s));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  return s;
+}
+function clearGraph(cv, msg) {
+  var s = sizeCanvas(cv), g = cv.getContext('2d');
+  g.fillStyle = '#0e1217'; g.fillRect(0, 0, cv.width, cv.height);
+  g.fillStyle = '#b4bfcb'; g.font = Math.round(16 * s) + 'px system-ui,sans-serif'; g.fillText(msg, 12 * s, cv.height / 2);
+}
+var KC = ['#3ddc84', '#3ddc84', '#ffb300', '#ff5252'];
+function drawGraph(cv, R, tEnd, span, live) {
+  var s = sizeCanvas(cv), W = cv.width, H = cv.height, g = cv.getContext('2d');
+  var fs = Math.round(15 * s), lane = Math.round(12 * s), y0 = lane * 3 + Math.round(4 * s), y1 = H - Math.round(22 * s);
+  g.fillStyle = '#0e1217'; g.fillRect(0, 0, W, H);
+  var t0 = tEnd - span;
+  function xt(t) { return (t - t0) / span * W; }
+  var vs = R.ref > 0 ? R.ref : (R.med > 0 ? R.med : 16.667);
+  var n = R.n, i, i0 = n, mx = 0;
+  while (i0 > 0 && R.ts[i0 - 1] >= t0) i0--;
+  for (i = i0; i < n; i++) { if (R.intv[i] > mx) mx = R.intv[i]; if (R.lat[i] > mx) mx = R.lat[i]; }
+  var ymax = Math.max(3 * vs, Math.min(8 * vs, mx * 1.08));
+  function yp(v) { return y1 - Math.min(v, ymax) / ymax * (y1 - y0); }
+  g.font = fs + 'px system-ui,sans-serif'; g.textBaseline = 'alphabetic';
+  /* time ticks */
+  var steps = [1, 2, 5, 10, 30, 60], step = 1000;
+  for (i = 0; i < steps.length; i++) { step = steps[i] * 1000; if (span / step <= 11) break; }
+  g.strokeStyle = '#1d242d'; g.lineWidth = 1; g.fillStyle = '#8e9aa8';
+  for (var tk = Math.ceil((t0 - tEnd) / step) * step + tEnd; tk <= tEnd; tk += step) {
+    var x = Math.round(xt(tk)) + .5; g.beginPath(); g.moveTo(x, y0); g.lineTo(x, y1); g.stroke();
+    g.fillText(((tk - tEnd) / 1000).toFixed(0) + 's', Math.min(W - 40 * s, x + 3), H - 5 * s);
+  }
+  /* stalls: column + lane 0 */
+  g.fillStyle = 'rgba(234,128,252,.18)';
+  for (i = 0; i < stN; i++) {
+    if (stT[i] < t0) continue; if (stT[i] - stD[i] > tEnd) break;
+    g.fillRect(xt(stT[i] - stD[i]), y0, Math.max(2, stD[i] / span * W), y1 - y0);
+  }
+  /* bars */
+  for (i = i0; i < n; i++) {
+    var xr = xt(R.ts[i]), xl = xt(R.ts[i] - R.intv[i]), h = y1 - yp(R.intv[i]);
+    g.fillStyle = KC[R.k[i] > 3 ? 3 : R.k[i]];
+    g.fillRect(xl + .5, yp(R.intv[i]), Math.max(1, xr - xl - 1), h);
+    if (R.intv[i] > ymax) { g.fillStyle = '#fff'; g.fillRect(xl + .5, y0, Math.max(1, xr - xl - 1), 3 * s); }
+  }
+  /* guides */
+  g.setLineDash([6 * s, 5 * s]); g.strokeStyle = '#d0d8e0'; g.lineWidth = Math.max(1, s); g.fillStyle = '#d0d8e0';
+  for (var m = 1; m <= 2; m++) { var yy = yp(m * vs); if (m * vs <= ymax) { g.beginPath(); g.moveTo(0, yy); g.lineTo(W, yy); g.stroke(); g.fillText(m + 'x vsync ' + (m * vs).toFixed(1) + ' ms', 6 * s, yy - 4 * s); } }
+  g.setLineDash([]);
+  /* latency line */
+  g.strokeStyle = '#4dd0e1'; g.lineWidth = 2 * s; g.beginPath();
+  for (i = i0; i < n; i++) { var lx = xt(R.ts[i]), ly = yp(Math.max(0, R.lat[i])); if (i === i0) g.moveTo(lx, ly); else g.lineTo(lx, ly); }
+  g.stroke();
+  /* lanes */
+  g.fillStyle = '#ea80fc';
+  for (i = 0; i < stN; i++) { if (stT[i] < t0) continue; if (stT[i] - stD[i] > tEnd) break; g.fillRect(xt(stT[i] - stD[i]), 0, Math.max(3 * s, stD[i] / span * W), lane - 1); }
+  for (i = 0; i < ltN; i++) {
+    if (ltT[i] + ltD[i] < t0 || ltT[i] > tEnd) continue;
+    if (ltK[i] === 1) { g.strokeStyle = '#ff9800'; g.lineWidth = 2 * s; g.strokeRect(xt(ltT[i]), lane + 1, Math.max(3 * s, ltD[i] / span * W), lane - 2); }
+    else { g.fillStyle = '#26c6da'; g.fillRect(xt(ltT[i]), lane + 1, Math.max(3 * s, ltD[i] / span * W), lane - 2); }
+  }
+  g.strokeStyle = '#fff'; g.fillStyle = '#fff'; g.lineWidth = 2 * s;
+  for (i = 0; i < lcN; i++) {
+    if (lcT[i] < t0 || lcT[i] > tEnd) continue;
+    var lxx = xt(lcT[i]); g.beginPath(); g.moveTo(lxx, lane * 2); g.lineTo(lxx, y1); g.stroke();
+    g.fillText(lcName[i], Math.min(lxx + 3, W - 70 * s), lane * 3 - 1);
+  }
+  if (live && R.n === 0) { g.fillStyle = '#ffb300'; g.font = Math.round(20 * s) + 'px system-ui,sans-serif'; g.fillText(R.phase === 'warm' ? 'warm-up (not counted)...' : 'waiting for frames...', W / 2 - 100 * s, H / 2); }
+}
+
+/* ---------------- environment ---------------- */
+function glInfo() {
+  try {
+    var c = document.createElement('canvas'), g = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (!g) return null;
+    var e = g.getExtension('WEBGL_debug_renderer_info');
+    var r = { renderer: e ? g.getParameter(e.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER) + ' (masked)', vendor: e ? g.getParameter(e.UNMASKED_VENDOR_WEBGL) : g.getParameter(g.VENDOR) + ' (masked)', version: g.getParameter(g.VERSION), maxTex: g.getParameter(g.MAX_TEXTURE_SIZE) };
+    var l = g.getExtension('WEBGL_lose_context'); if (l) l.loseContext();
+    return r;
+  } catch (e) { return null; }
+}
+function timerRes() {
+  var t = performance.now(), start = t, m = Infinity, c = 0;
+  while (performance.now() - start < 20 && c < 2000) { var u = performance.now(); if (u > t) { if (u - t < m) m = u - t; t = u; c++; } }
+  return m === Infinity ? 'coarser than 20 ms?' : (m * 1000).toFixed(0) + ' us';
+}
+function mq(q) { try { return window.matchMedia(q).matches; } catch (e) { return 'n/a'; } }
+var GL = glInfo();
+var ENV = [];
+function buildEnv() {
+  var dpr = window.devicePixelRatio || 1;
+  ENV = [
+    ['User agent', navigator.userAgent],
+    ['devicePixelRatio', String(dpr)],
+    ['Screen', screen.width + 'x' + screen.height + ' (avail ' + screen.availWidth + 'x' + screen.availHeight + ', ' + screen.colorDepth + '-bit)'],
+    ['Window', innerWidth + 'x' + innerHeight + ' css px = ' + Math.round(innerWidth * dpr) + 'x' + Math.round(innerHeight * dpr) + ' device px (outer ' + outerWidth + 'x' + outerHeight + ')'],
+    ['hardwareConcurrency', String(navigator.hardwareConcurrency || 'n/a')],
+    ['deviceMemory', navigator.deviceMemory ? navigator.deviceMemory + ' GB' : 'n/a'],
+    ['WebGL renderer', GL ? GL.renderer : 'WebGL not available'],
+    ['WebGL vendor', GL ? GL.vendor + ' | ' + GL.version + ' | max texture ' + GL.maxTex : 'n/a'],
+    ['prefers-reduced-motion', String(mq('(prefers-reduced-motion: reduce)'))],
+    ['(update: fast)', String(mq('(update: fast)'))],
+    ['crossOriginIsolated', String(window.crossOriginIsolated === true)],
+    ['Secure context', String(window.isSecureContext)],
+    ['performance.now step', timerRes()],
+    ['Long tasks', LT_OK ? 'supported' : 'not supported'],
+    ['Long animation frames', LOAF_OK ? 'supported' : 'not supported'],
+    ['MessageChannel', hbPort ? 'yes (heartbeat via ' + (HB_SPIN ? 'message spin' : 'message + timer') + ')' : 'no (heartbeat uses setTimeout 4)'],
+    ['Page', location.href.replace(/^.*\//, '') + '  secs=' + SECS + (DECL_HZ ? '  declared ' + DECL_HZ + ' Hz' : '')]
+  ];
+  var h = ''; ENV.forEach(function (e) { h += '<dt>' + esc(e[0]) + '</dt><dd>' + esc(e[1]) + '</dd>'; });
+  $('env').innerHTML = h;
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+/* ---------------- verdict ----------------
+ Conservative: every rule needs a minimum of evidence, says what it used, and no rule
+ blames "the page" unless the Idle mode (which does nothing) is itself clean while a
+ loaded mode is not.  k>=2 share: % of frames with k>=2.  A mode "skips" at >=3 %, is
+ "clean" below 1 %.  Late = latency p95 above half a vsync.  Starved = at least 2
+ heartbeat stalls or one over 32 ms. */
+function computeVerdict(res) {
+  var items = [];
+  function add(sev, title, text, ev) { items.push({ sev: sev, title: title, text: text, ev: ev || [] }); }
+  function okm(id) { return res[id] && res[id].status === 'ok' ? res[id] : null; }
+  var idle = okm('idle'), c4 = okm('cpu4'), c10 = okm('cpu10'), cv = okm('canvas'), gl = okm('webgl'), tm = okm('timer');
+  var any = false, id; for (id in res) if (res[id].status === 'ok') any = true;
+  if (!any) { add('info', 'No results yet', 'Run the sequence (Enter / OK).'); return items; }
+  var f = function (x, d) { return (+x).toFixed(d === undefined ? 1 : d); };
+  var evm = function (m) { return m.name + ': ' + f(m.hz) + ' Hz (own ' + f(m.hzOwn) + '), k>=2 ' + f(m.kPct) + ' %, interval p50/p95/max ' + f(m.p50) + '/' + f(m.p95) + '/' + f(m.max) + ' ms, latency p95/max ' + f(m.latP95) + '/' + f(m.latMax) + ' ms, stalls ' + m.stN + ' (worst ' + f(m.stWorst) + ' ms)'; };
+  var skips = function (m) { return m && m.frames >= 30 && m.kPct >= T_SKIP; };
+  var clean = function (m) { return m && m.kPct < T_CLEAN; };
+  var starved = function (m) { return m.stN >= T_STALLN || m.stWorst >= T_STALLMS; };
+  var late = function (m) { return m.latValid && m.latP95 > T_LATE * m.vsMs; };
+  var aligned = function (m) { return m.skipTot >= 3 && m.align >= T_ALIGN && m.align >= m.base + 0.3; };
+
+  for (id in res) if (res[id].status === 'ok' && res[id].hidden) add('warn', 'Page was hidden or frozen during ' + res[id].name, 'A visibilitychange to hidden, freeze or pagehide happened during the measured part, so that mode\'s numbers are unreliable. Rerun it with this tab in front.', []);
+  for (id in res) if (res[id].status === 'ok' && !res[id].latValid) add('info', 'rAF timestamps are not on the performance.now clock in ' + res[id].name, 'Median (now - ts) is ' + f(res[id].latP50) + ' ms, which is not a plausible dispatch latency; this browser may stamp frames differently. Latency-based rules are disabled for it.', []);
+
+  if (!idle) {
+    add('info', 'No Idle baseline', 'Without the Idle mode there is no baseline, so no verdict is given about where the loss happens. Run the full sequence (Enter / OK).', [c4, c10, cv, gl].filter(Boolean).map(evm));
+  } else {
+    var hzI = f(idle.hzOwn), vsI = idle.vsMs;
+    /* 1. half-rate pacing */
+    if (DECL_HZ > 0 && idle.hzOwn < 0.65 * DECL_HZ && idle.hzOwn > 0.4 * DECL_HZ) {
+      add('bad', 'rAF is paced at about half the display rate', 'The refresh is about ' + DECL_HZ + ' Hz (as declared with ?hz=) but frames arrive at about ' + hzI + ': the browser is pacing rAF at half rate.', [evm(idle), 'declared ' + DECL_HZ + ' Hz, measured Idle ' + hzI + ' Hz']);
+    } else {
+      var hi = null; [c4, c10, cv, gl].forEach(function (m) { if (m && m.hzOwn >= 1.8 * idle.hzOwn && m.hzOwn < 2.6 * idle.hzOwn && (!hi || m.hzOwn > hi.hzOwn)) hi = m; });
+      if (hi) add('bad', 'rAF rate changes with load: Idle runs at about half the rate of ' + hi.name, 'Idle frames arrive at about ' + hzI + ' Hz but ' + hi.name + ' gets about ' + f(hi.hzOwn) + ' Hz. The refresh is about ' + f(hi.hzOwn) + ' Hz and the browser is pacing rAF at half rate (a power or idle throttle) when the page is doing nothing.', [evm(idle), evm(hi)]);
+      else if (idle.hzOwn > 40 && idle.hzOwn < 75 && idle.fastShare >= 0.1)
+        add('warn', 'Possible half-rate pacing', 'Idle runs at about ' + hzI + ' Hz, yet ' + f(idle.fastShare * 100, 0) + ' % of intervals are under 0.65 of the median. That can mean the display is faster than rAF cadence. If the TV is 120 Hz, reload with ?hz=120 to test it.', [evm(idle), 'fast-interval share ' + f(idle.fastShare * 100) + ' %']);
+    }
+    /* 2. Idle skipping */
+    if (skips(idle)) {
+      if (aligned(idle) && starved(idle)) {
+        add('bad', 'Heartbeat stalls line up with the skipped frames', 'Heartbeat stalls line up with the skipped frames: the main thread is being descheduled. Check for OS background work or thermal throttling.', [evm(idle), idle.skipMatch + ' of ' + idle.skipTot + ' skipped frames overlap a stall (' + f(idle.align * 100, 0) + ' %) against ' + f(idle.base * 100, 0) + ' % of on-time frames']);
+      } else if (idle.stN < T_STALLN && idle.stWorst < T_STALLMS && (!idle.latValid || idle.latP95 <= 0.35 * vsI)) {
+        add('bad', 'Frames are skipped even when idle, and the main thread is not stalled', 'Frames are skipped even when idle, and the main thread is not stalled: the compositor, GPU or OS is dropping vsyncs. It is not the page.', [evm(idle), 'heartbeat ' + f(idle.hbRate, 0) + ' beats/s, worst gap ' + f(idle.hbMax) + ' ms']);
+      } else if (late(idle)) {
+        add('bad', 'Frames are skipped and callbacks start late', 'Idle skips frames and its callbacks start late (latency p95 ' + f(idle.latP95) + ' ms, over half a vsync): the main thread is being scheduled late by the OS or browser.', [evm(idle)]);
+      } else {
+        add('warn', 'Frames are skipped when idle, cause not clear', 'Idle skips frames and the heartbeat shows some stalls, but they do not line up with the skipped frames. Both the main thread and the compositor may be at fault.', [evm(idle), idle.skipMatch + ' of ' + idle.skipTot + ' skipped frames overlap a stall']);
+      }
+    } else if (late(idle)) {
+      add('bad', 'rAF timestamps are regular but callbacks start late', 'rAF timestamps are regular but callbacks start late: the main thread is being scheduled late (OS or browser scheduling).', [evm(idle), 'late = latency p95 ' + f(idle.latP95) + ' ms > ' + f(T_LATE * vsI) + ' ms (half a vsync)']);
+    } else if (starved(idle)) {
+      add('warn', 'The main thread stalls even though no frames were skipped', 'The heartbeat saw ' + idle.stN + ' stall(s), worst ' + f(idle.stWorst) + ' ms, with no skipped frames in Idle. The event loop is occasionally starved; heavier modes may suffer.', [evm(idle)]);
+    } else if (clean(idle)) {
+      add('ok', 'Idle is clean', 'With nothing to do, rAF runs steadily at about ' + hzI + ' Hz, callbacks start on time and the main thread is not stalled.', [evm(idle)]);
+    }
+    if (idle.uiMax > 2 && GRAPH_IDLE) add('info', 'The page\'s own graph cost up to ' + f(idle.uiMax) + ' ms in Idle', 'That is small but not zero; reload with ?graph=0 to rule out the diagnostic itself as a cause.', []);
+
+    /* 3. the CPU modes */
+    if (clean(idle) || !skips(idle)) {
+      if (c4 && skips(c4)) add('bad', 'Even 4 ms of work per frame misses frames', 'CPU 4 ms skips ' + f(c4.kPct) + ' % of frames while Idle does not: the main thread has very little spare time (slow or contended CPU).', [evm(idle), evm(c4)]);
+      if (c10 && skips(c10) && c10.workP50 > 0.9 * 10 && c10.workP50 > vsI * 0.9) {
+        var others = [c4, cv, gl].filter(function (m) { return m && skips(m); }).length === 0;
+        add(others ? 'info' : 'info', (others ? 'Only the CPU 10 ms mode misses' : 'CPU 10 ms misses, as expected when the budget is under 10 ms'), (others ? 'Only the CPU 10 ms mode misses: ' : 'CPU 10 ms misses: ') + 'the page\'s per-frame budget (the vsync interval, ' + f(vsI) + ' ms) is the limit; the display runs at ' + f(idle.hz) + ' Hz.', [evm(c10), 'callback work p50 ' + f(c10.workP50) + ' ms vs budget ' + f(vsI) + ' ms']);
+      } else if (c10 && clean(c10) && vsI > 10) add('ok', 'CPU 10 ms fits the frame budget', 'At ' + f(idle.hz) + ' Hz the budget is ' + f(vsI) + ' ms, so 10 ms of work per frame does not miss.', [evm(c10)]);
+      /* 4. drawing modes */
+      [cv, gl].forEach(function (m) {
+        if (!m) return;
+        if (skips(m) && m.kPct > idle.kPct + T_SKIP) {
+          if (m.workP95 > 0.8 * m.vsMs) add('warn', m.name + ' misses and the callback itself is slow', m.name + ' skips ' + f(m.kPct) + ' % of frames and its callback takes ' + f(m.workP95) + ' ms (p95), about the whole budget: the page\'s JavaScript is the limit on this device.', [evm(idle), evm(m), 'work p50/p95/max ' + f(m.workP50) + '/' + f(m.workP95) + '/' + f(m.workMax) + ' ms at ' + m.size]);
+          else add('warn', m.name + ' misses although the callback returns quickly', m.name + ' skips ' + f(m.kPct) + ' % of frames, yet its callback takes only ' + f(m.workP95) + ' ms (p95): the cost is after JavaScript, in raster or the GPU' + (starved(m) ? ' (the heartbeat also stalled ' + m.stN + ' times, worst ' + f(m.stWorst, 0) + ' ms, so the GPU work is blocking the main thread, as software rendering does)' : '') + '. This device cannot fill ' + m.size + ' that often; fewer pixels or less overdraw would help.', [evm(idle), evm(m), 'work p50/p95/max ' + f(m.workP50) + '/' + f(m.workP95) + '/' + f(m.workMax) + ' ms at ' + m.size]);
+        } else if (clean(m)) add('ok', m.name + ' keeps up', m.name + ' at ' + m.size + ' does not skip frames (work p95 ' + f(m.workP95) + ' ms).', [evm(m)]);
+      });
+    } else {
+      [c4, c10, cv, gl].forEach(function (m) { if (m) add('info', m.name + ' not judged', 'Idle itself skips frames, so a loaded mode cannot be blamed for its misses.', [evm(m)]); });
+    }
+    if (tm) add('info', 'Timer-driven comparison', 'setTimeout(16) frames: interval p50/p95/max ' + f(tm.p50) + '/' + f(tm.p95) + '/' + f(tm.max) + ' ms, versus rAF in Idle ' + f(idle.p50) + '/' + f(idle.p95) + '/' + f(idle.max) + ' ms. Timers are not synchronised to the display; if timers stay regular while rAF skips, the main thread is fine and the loss is in frame delivery.', [evm(tm)]);
+  }
+  var bad = items.filter(function (i) { return i.sev === 'bad'; }).length, warn = items.filter(function (i) { return i.sev === 'warn'; }).length;
+  if (idle && !bad && !warn && !items.some(function (i) { return i.sev === 'ok'; })) add('ok', 'No timing problem detected', 'Nothing crossed a threshold.', []);
+  var order = { bad: 0, warn: 1, ok: 2, info: 3 };
+  items = items.map(function (it, i) { it.i = i; return it; }).sort(function (a, b) { return order[a.sev] - order[b.sev] || a.i - b.i; });
+  return items;
+}
+
+/* ---------------- results rendering ---------------- */
+var results = {}, verdictItems = [];
+var COLS = [
+  ['vsync Hz', function (m) { return m.hz.toFixed(1) + (m.refBorrowed ? '*' : ''); }],
+  ['FPS', function (m) { return m.fps.toFixed(1); }],
+  ['k>=2 %', function (m) { return m.kPct.toFixed(1); }],
+  ['int p50', function (m) { return m.p50.toFixed(1); }],
+  ['int p95', function (m) { return m.p95.toFixed(1); }],
+  ['int max', function (m) { return m.max.toFixed(1); }],
+  ['lat p95', function (m) { return m.latP95.toFixed(1); }],
+  ['lat max', function (m) { return m.latMax.toFixed(1); }],
+  ['work p95', function (m) { return m.workP95.toFixed(1); }],
+  ['stalls n/worst', function (m) { return m.stN + ' / ' + m.stWorst.toFixed(0); }],
+  ['long tasks n/ms', function (m) { return LT_OK ? m.ltN + ' / ' + m.ltMs.toFixed(0) : 'n/a'; }]
+];
+function sevClass(m, ci) { return ci === 2 && m.kPct >= T_SKIP ? 'bad' : (ci === 2 && m.kPct >= T_CLEAN ? 'warn' : ''); }
+function render() {
+  var any = false, id;
+  for (id in results) any = true;
+  $('result').style.display = any ? '' : 'none';
+  if (!any) return;
+  verdictItems = computeVerdict(results);
+  var top = verdictItems[0];
+  $('headline').className = top.sev; $('headline').textContent = top.title + '.';
+  var h = '';
+  verdictItems.forEach(function (v) { h += '<div class="v ' + v.sev + '"><h3>' + esc(v.title) + '</h3><p>' + esc(v.text) + '</p>' + (v.ev.length ? '<ul>' + v.ev.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul>' : '') + '</div>'; });
+  $('verdicts').innerHTML = h;
+  var t = '<thead><tr><th>Mode</th>' + COLS.map(function (c) { return '<th>' + c[0] + '</th>'; }).join('') + '</tr></thead><tbody>';
+  MODES.forEach(function (m) {
+    var S = results[m.id]; if (!S) return;
+    if (S.status !== 'ok') { t += '<tr><td>' + esc(m.name) + '</td><td colspan="' + COLS.length + '" style="text-align:left" class="warn">' + (S.status === 'skipped' ? 'skipped: ' : 'no data: ') + esc(S.reason || '') + '</td></tr>'; return; }
+    t += '<tr><td>' + esc(m.name) + (S.hidden ? ' <span class="warn">(hidden!)</span>' : '') + '</td>' + COLS.map(function (c, ci) { return '<td data-l="' + c[0] + '" class="' + sevClass(S, ci) + '">' + c[1](S) + '</td>'; }).join('') + '</tr>';
+  });
+  $('sum').innerHTML = t + '</tbody>';
+  var refd = false; for (id in results) if (results[id].refBorrowed) refd = true;
+  $('sumnote').textContent = 'Times in ms. ' + (refd ? '* k is computed against the display rate taken from Idle' + (DECL_HZ ? ' (declared ?hz=' + DECL_HZ + ')' : '') + ', not each mode\'s own median. ' : '') + 'Long tasks: ' + (LT_OK ? 'supported' : 'not supported') + (LOAF_OK ? ', long animation frames recorded too' : '') + '.';
+  /* per-mode timelines */
+  var tls = $('tls'); tls.innerHTML = '';
+  MODES.forEach(function (m) {
+    var S = results[m.id]; if (!S || S.status !== 'ok') return;
+    var d = document.createElement('div'); d.innerHTML = '<b>' + esc(m.name) + '</b>'; var c = document.createElement('canvas'); c.className = 'tl'; d.appendChild(c); tls.appendChild(d);
+    c._S = S;
+  });
+  drawTimelines();
+  var rep = buildReport();
+  $('rep').textContent = rep;
+  try { $('bJson').href = URL.createObjectURL(new Blob([JSON.stringify(buildJson(), null, 1)], { type: 'application/json' })); } catch (e) {}
+}
+function drawTimelines() {
+  var cs = $('tls').getElementsByTagName('canvas');
+  for (var i = 0; i < cs.length; i++) { var S = cs[i]._S; if (S) drawGraph(cs[i], S.run, S.t1, Math.max(1000, S.t1 - S.t0), false); }
+}
+var rsz = 0; window.addEventListener('resize', function () { clearTimeout(rsz); rsz = setTimeout(function () { drawTimelines(); if (!cur) clearGraph($('graph'), seqState === 'done' ? 'finished: see the timelines below' : ''); }, 200); });
+
+function pad(s, n) { s = String(s); while (s.length < n) s += ' '; return s; }
+function padl(s, n) { s = String(s); while (s.length < n) s = ' ' + s; return s; }
+function buildReport() {
+  var L = [], f = function (x, d) { return (+x).toFixed(d); };
+  L.push('RAF TIMING DIAGNOSTIC  ' + new Date().toISOString());
+  L.push('');
+  ENV.forEach(function (e) { L.push(pad(e[0], 24) + e[1]); });
+  L.push('');
+  L.push('VERDICT: ' + (verdictItems[0] ? verdictItems[0].title : 'n/a'));
+  verdictItems.forEach(function (v) { L.push('[' + v.sev.toUpperCase() + '] ' + v.title); L.push('   ' + v.text); v.ev.forEach(function (e) { L.push('     - ' + e); }); });
+  L.push('');
+  L.push(pad('mode', 22) + padl('Hz', 6) + padl('FPS', 6) + padl('k>=2%', 7) + padl('p50', 6) + padl('p95', 6) + padl('max', 7) + padl('lat95', 7) + padl('latMx', 7) + padl('stall', 9) + padl('longtask', 10));
+  MODES.forEach(function (m) {
+    var S = results[m.id]; if (!S) return;
+    if (S.status !== 'ok') { L.push(pad(m.name, 22) + ' ' + S.status + ': ' + (S.reason || '')); return; }
+    L.push(pad(m.name, 22) + padl(f(S.hz, 1), 6) + padl(f(S.fps, 1), 6) + padl(f(S.kPct, 1), 7) + padl(f(S.p50, 1), 6) + padl(f(S.p95, 1), 6) + padl(f(S.max, 1), 7) + padl(f(S.latP95, 1), 7) + padl(f(S.latMax, 1), 7) + padl(S.stN + '/' + f(S.stWorst, 0), 9) + padl(LT_OK ? S.ltN + '/' + f(S.ltMs, 0) : 'n/a', 10));
+  });
+  L.push('(times in ms; Hz = display rate used for k; stall = heartbeat gaps over 16 ms, n/worst ms)');
+  L.push('');
+  L.push('EVENTS (time in s since page load)');
+  var cnt = 0, i;
+  for (i = 0; i < lcN && cnt < 60; i++, cnt++) L.push('  ' + f(lcT[i] / 1000, 2) + 's  page ' + lcName[i]);
+  for (i = 0; i < ltN && cnt < 60; i++, cnt++) L.push('  ' + f(ltT[i] / 1000, 2) + 's  ' + (ltK[i] ? 'long-animation-frame ' : 'long task ') + f(ltD[i], 0) + ' ms');
+  L.push('  heartbeat stalls: ' + stN + ' total, first 40 shown');
+  for (i = 0; i < stN && i < 40; i++) L.push('  ' + f((stT[i] - stD[i]) / 1000, 2) + 's  stall ' + f(stD[i], 0) + ' ms');
+  return L.join('\n');
+}
+function r2(a, n) { var o = new Array(n); for (var i = 0; i < n; i++) o[i] = Math.round(a[i] * 100) / 100; return o; }
+function buildJson() {
+  var o = { when: new Date().toISOString(), url: location.href, secsPerMode: SECS, declaredHz: DECL_HZ, env: {}, verdict: verdictItems, modes: {}, events: { stalls: [], longtasks: [], lifecycle: [] } };
+  ENV.forEach(function (e) { o.env[e[0]] = e[1]; });
+  MODES.forEach(function (m) {
+    var S = results[m.id]; if (!S) return;
+    var c = {}; for (var k in S) if (k !== 'run') c[k] = S[k];
+    if (S.run && S.status === 'ok') { var R = S.run, n = R.n; c.raw = { ts: r2(R.ts, n), now: r2(R.now, n), end: r2(R.end, n), work: r2(R.work, n), latency: r2(R.lat, n), interval: r2(R.intv, n), k: Array.prototype.slice.call(R.k.subarray(0, n)) }; }
+    o.modes[m.id] = c;
+  });
+  var i; for (i = 0; i < stN; i++) o.events.stalls.push({ end: Math.round(stT[i] * 100) / 100, ms: Math.round(stD[i] * 100) / 100 });
+  for (i = 0; i < ltN; i++) o.events.longtasks.push({ start: Math.round(ltT[i] * 100) / 100, ms: Math.round(ltD[i] * 100) / 100, type: ltK[i] ? 'loaf' : 'longtask' });
+  for (i = 0; i < lcN; i++) o.events.lifecycle.push({ t: Math.round(lcT[i] * 100) / 100, name: lcName[i] });
+  return o;
+}
+$('bCopy').addEventListener('click', function () {
+  var txt = $('rep').textContent, done = function (ok) {
+    $('copied').textContent = ok ? ' copied' : '';
+    if (!ok) { var fb = $('fb'); fb.style.display = 'block'; fb.value = txt; fb.focus(); fb.select(); $('copied').textContent = ' select all and copy from the box below'; }
+  };
+  try { if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(txt).then(function () { done(true); }, function () { done(false); }); return; } } catch (e) {}
+  var ok = false; try { var ta = document.createElement('textarea'); ta.value = txt; ta.style.cssText = 'position:fixed;left:0;top:0;opacity:0'; document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); document.body.removeChild(ta); } catch (e) {}
+  done(ok);
+});
+
+/* ---------------- sequencing ---------------- */
+var token = 0, seqState = 'init', sel = -1;
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+function setStatus(s) { $('status').textContent = s; }
+function chips() {
+  var h = ''; MODES.forEach(function (m, i) { h += '<button data-i="' + i + '" class="' + (i === sel ? 'sel' : '') + '">' + esc(m.name) + '</button>'; });
+  $('chips').innerHTML = h;
+}
+$('chips').addEventListener('click', function (e) { var b = e.target.closest ? e.target.closest('button') : null; if (b) runSingle(+b.getAttribute('data-i')); });
+$('bRestart').addEventListener('click', function () { runAll(); });
+function abortCurrent() { token++; if (cur) teardown(cur); }
+async function runMode(m, tok, label) {
+  var R = newRun(m);
+  cur = R;
+  setupMode(R);
+  if (R.skip) { results[m.id] = { id: m.id, name: m.name, status: 'skipped', reason: R.skip }; teardown(R); return; }
+  R.cb = m.id === 'timer' ? timerCb(R) : rafCb(R);
+  setStatus(label + ': ' + m.name);
+  if (m.id === 'timer') R.tm = setTimeout(R.cb, 16); else R.raf = requestAnimationFrame(R.cb);
+  await sleep(WARM);
+  if (tok !== token) { teardown(R); return; }
+  R.tStart = performance.now(); R.planEnd = R.tStart + SECS * 1000; R.phase = 'run';
+  while (performance.now() < R.planEnd) { await sleep(Math.max(1, Math.min(250, R.planEnd - performance.now()))); if (tok !== token) { teardown(R); return; } }
+  R.tEnd = performance.now(); R.phase = 'done';
+  await sleep(50);
+  flushObservers();
+  var S = finalize(R);
+  if (R.lost) { S.status = 'skipped'; S.reason = 'WebGL context was lost during the run'; }
+  results[m.id] = S;
+  teardown(R);
+  await sleep(250);
+}
+async function runList(list, tok, countdown) {
+  seqState = 'running';
+  clearGraph($('graph'), 'waiting...');
+  if (countdown) for (var c = COUNTDOWN; c > 0; c--) { setStatus('Starting in ' + c + ' ... keep this tab in front'); setTile('mode', 'starting in ' + c); await sleep(1000); if (tok !== token) return; }
+  for (var i = 0; i < list.length; i++) {
+    await runMode(MODES[list[i]], tok, (list.length > 1 ? 'Mode ' + (i + 1) + ' of ' + list.length : 'Single mode'));
+    if (tok !== token) return;
+    render();
+  }
+  seqState = 'done';
+  flushObservers();
+  setStatus('Done. Enter / OK: run everything again. Left / Right: one mode.');
+  clearGraph($('graph'), 'finished: see the timelines below');
+  render();
+  setTile('mode', 'finished'); setTile('left', '-');
+  try { $('result').scrollIntoView({ block: 'start' }); } catch (e) {}
+}
+function runAll() { abortCurrent(); results = {}; sel = -1; chips(); $('result').style.display = 'none'; runList([0, 1, 2, 3, 4, 5], token, true); }
+function runSingle(i) { abortCurrent(); sel = i; chips(); runList([i], token, false); }
+window.addEventListener('keydown', function (e) {
+  var k = e.key, c = e.keyCode;
+  if (k === 'Enter' || c === 13 || c === 23 || k === 'Select') { e.preventDefault(); runAll(); }
+  else if (k === 'ArrowLeft' || c === 37) { e.preventDefault(); runSingle((sel < 0 ? 0 : sel + MODES.length - 1) % MODES.length); }
+  else if (k === 'ArrowRight' || c === 39) { e.preventDefault(); runSingle((sel + 1) % MODES.length); }
+});
+
+/* ---------------- go ---------------- */
+$('tmsg').textContent = (LT_OK ? '' : 'Long tasks: not supported by this browser. ') + (LOAF_OK ? '' : 'Long animation frames: not supported. ') + (GRAPH_IDLE ? '' : 'Graph hidden during Idle (?graph=0). ');
+buildEnv(); chips();
+window.__rafdiag = { results: function () { return results; }, state: function () { return seqState; }, verdict: function () { return verdictItems; } };
+runList([0, 1, 2, 3, 4, 5], token, true);
+})();
+</script>
+</body>
+</html>

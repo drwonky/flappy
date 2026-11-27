@@ -432,6 +432,9 @@ NAME  x.x
 
 ## Troubleshooting
 
+**Is it the page or the TV?**
+Open `raf-diag.html` (next to the game) on the TV, with `?hz=120` on a 120 Hz set. It runs six 20-second tests (idle, CPU load, canvas, WebGL, timer) and says whether the browser is dropping refreshes, scheduling the page late, stalling the main thread, or pacing at half rate, with the numbers behind its verdict. OK restarts it; Left/Right runs one test.
+
 **The game stutters on a TV.**
 Open it with `?fps&prof`. Compare `SIM` and `DRAW` in the `?fps` readout. If `DRAW` is large, the picture is the cost. If `SIM` is large, the game logic is.
 
